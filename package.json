@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "description": "A secure, city-based clothing swap marketplace demo using Node.js, Express, MongoDB, and vanilla HTML/CSS/JavaScript.",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
@@ -20,7 +22,8 @@
     "express-session": "^1.18.2",
     "helmet": "^8.1.0",
     "mongoose": "^8.19.1",
-    "multer": "^2.0.2"
+    "multer": "^2.0.2",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "mongodb-memory-server": "^10.2.3",

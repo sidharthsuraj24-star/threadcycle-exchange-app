@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
+const sharp = require('sharp');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { User, Listing, Swap, Message, ActivityEvent } = require('./models');
@@ -75,7 +76,16 @@ const listingView = (item, owner) => ({
   imageUrls: item.isDemo ? [`/images/demo-${item.demoImageNo}.webp`] : Array.from({ length: item.imageCount || 0 }, (_, index) => `/api/listings/${item._id}/images/${index}`),
   createdAt: item.createdAt
 });
-const csrfMatches = (req) => typeof req.body?._csrf === 'string' && req.body._csrf === req.session.csrfToken || req.get('x-csrf-token') === req.session.csrfToken;
+const csrfMatches = (req) => {
+  const expected = req.session?.csrfToken;
+  if (typeof expected !== 'string' || expected.length === 0) return false;
+  return [req.body?._csrf, req.get('x-csrf-token')].some((candidate) => {
+    if (typeof candidate !== 'string') return false;
+    const expectedBytes = Buffer.from(expected);
+    const candidateBytes = Buffer.from(candidate);
+    return expectedBytes.length === candidateBytes.length && crypto.timingSafeEqual(expectedBytes, candidateBytes);
+  });
+};
 function requireCsrf(req, res, next) {
   try {
     const origin = req.get('origin');
@@ -147,10 +157,27 @@ const validateImageBytes = (file) => {
 };
 const storage = multer.memoryStorage();
 const upload = multer({ storage, limits: { fileSize: 1_000_000, files: 4, fields: 16, fieldSize: 1200 }, fileFilter: (_req, file, cb) => {
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) return cb(new HttpError(400, 'Photos must be JPEG, PNG, or WebP; SVG and animated files are not accepted.'));
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) return cb(new HttpError(400, 'Photos must be JPEG, PNG, or WebP; SVG files are not accepted.'));
   cb(null, true);
 } });
-const imageFiles = (req) => (req.files || []).map(validateImageBytes);
+const imageFiles = async (req) => {
+  const images = [];
+  for (const file of req.files || []) {
+    validateImageBytes(file);
+    try {
+      const data = await sharp(file.buffer, { limitInputPixels: 40_000_000 })
+        .rotate()
+        .webp({ quality: 82, alphaQuality: 100, effort: 4 })
+        .toBuffer();
+      if (data.length > 1_000_000) throw new HttpError(400, 'Each photo must be 1 MB or smaller after processing.');
+      images.push({ data, mime: 'image/webp', bytes: data.length });
+    } catch (error) {
+      if (error.status) throw error;
+      throw new HttpError(400, 'Use a valid JPEG, PNG, or WebP image file.');
+    }
+  }
+  return images;
+};
 const optionalComparableRetailPrice = (value) => {
   if (value === undefined || value === null || value === '') return null;
   if (typeof value !== 'string' && typeof value !== 'number') throw new HttpError(400, 'Enter a valid comparable retail price.');
@@ -236,8 +263,10 @@ app.get('/api/listings', async (req, res) => {
     if (req.query.city) query.city = new RegExp(`^${String(req.query.city).slice(0, 60).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
     if (req.query.q) { const text = String(req.query.q).slice(0, 60).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); query.$or = [{ title: new RegExp(text, 'i') }, { brand: new RegExp(text, 'i') }, { description: new RegExp(text, 'i') }]; }
     const page = Math.max(1, Math.min(50, Number(req.query.page) || 1));
-    const items = await Listing.find(query).select('-images').sort({ createdAt: -1 }).skip((page - 1) * 24).limit(24).populate('owner', 'name city isDemo demoLabel');
-    const count = await Listing.countDocuments(query);
+    const [items, count] = await Promise.all([
+      Listing.find(query).select('-images').sort({ createdAt: -1 }).skip((page - 1) * 24).limit(24).populate('owner', 'name city isDemo demoLabel'),
+      Listing.countDocuments(query)
+    ]);
     res.json({ items: items.map((item) => listingView(item)), total: count, page });
   } catch (e) { sendError(res, e); }
 });
@@ -261,7 +290,7 @@ app.get('/api/listings/:id/images/:index', async (req, res) => {
 app.post('/api/listings', requireUser, requireCsrf, (req, res, next) => upload.array('images', 4)(req, res, (err) => err ? sendError(res, err instanceof multer.MulterError ? new HttpError(400, err.code === 'LIMIT_FILE_SIZE' ? 'Each photo must be 1 MB or smaller.' : 'Upload up to 4 photos.') : err) : next()), async (req, res) => {
   try {
     const fields = listingFilterFromBody(req.body, req.user.city);
-    const images = imageFiles(req);
+    const images = await imageFiles(req);
     const item = await Listing.create({ ...fields, owner: req.user._id, images, imageCount: images.length });
     await recordActivity(req.user._id, 'listing_created');
     res.status(201).json({ item: listingView(item, req.user) });
@@ -273,7 +302,7 @@ app.patch('/api/listings/:id', requireUser, requireCsrf, (req, res, next) => upl
     if (!item || String(item.owner) !== String(req.user._id) || item.isDemo) throw new HttpError(404, 'Item not found.');
     if (item.status !== 'available') throw new HttpError(409, 'Only available items can be edited.');
     Object.assign(item, listingFilterFromBody(req.body, req.user.city));
-    const images = imageFiles(req);
+    const images = await imageFiles(req);
     if (images.length) { item.images = images; item.imageCount = images.length; }
     item.updatedAt = new Date();
     await item.save();
@@ -338,21 +367,43 @@ app.get('/api/swaps', requireUser, async (req, res) => {
 });
 app.patch('/api/swaps/:id/status', requireUser, requireCsrf, async (req, res) => {
   try {
+    const action = req.body.action;
+    if (action === 'accept') {
+      const session = await mongoose.startSession();
+      try {
+        let acceptedSwap;
+        await session.withTransaction(async () => {
+          const swap = await Swap.findById(parseId(req.params.id, 'Swap')).session(session);
+          if (!swap || !isParticipant(swap, req.user._id)) throw new HttpError(404, 'Swap not found.');
+          if (String(swap.recipient) !== String(req.user._id) || swap.status !== 'requested') throw new HttpError(409, 'Only the recipient can respond to a pending request.');
+          const listingIds = [swap.offeredListing, swap.requestedListing];
+          const reservation = await Listing.updateMany(
+            { _id: { $in: listingIds }, status: 'available' },
+            { $set: { status: 'reserved', updatedAt: new Date() } },
+            { session }
+          );
+          if (reservation.modifiedCount !== 2) throw new HttpError(409, 'One of these items is no longer available.');
+          transitionSwap(swap, 'accepted', req.user._id);
+          await swap.save({ session });
+          const conflicts = await Swap.find({ _id: { $ne: swap._id }, status: 'requested', $or: [{ offeredListing: { $in: listingIds } }, { requestedListing: { $in: listingIds } }] }).session(session);
+          for (const conflict of conflicts) {
+            transitionSwap(conflict, 'declined', req.user._id);
+            await conflict.save({ session });
+          }
+          await ActivityEvent.create([{ member: req.user._id, action: 'swap_accepted' }], { session });
+          acceptedSwap = { id: String(swap._id), status: swap.status, confirmed: swap.confirmedBy.length };
+        });
+        return res.json({ swap: acceptedSwap });
+      } finally {
+        await session.endSession();
+      }
+    }
     const swap = await Swap.findById(parseId(req.params.id, 'Swap'));
     if (!swap || !isParticipant(swap, req.user._id)) throw new HttpError(404, 'Swap not found.');
-    const action = req.body.action;
     let activityAction = null;
-    if (action === 'accept' || action === 'decline') {
+    if (action === 'decline') {
       if (String(swap.recipient) !== String(req.user._id) || swap.status !== 'requested') throw new HttpError(409, 'Only the recipient can respond to a pending request.');
-      if (action === 'decline') { transitionSwap(swap, 'declined', req.user._id); activityAction = 'swap_declined'; }
-      else {
-        const [offered, requested] = await Promise.all([Listing.findById(swap.offeredListing), Listing.findById(swap.requestedListing)]);
-        if (!offered || !requested || offered.status !== 'available' || requested.status !== 'available') throw new HttpError(409, 'One of these items is no longer available.');
-        offered.status = 'reserved'; requested.status = 'reserved'; await Promise.all([offered.save(), requested.save()]);
-        transitionSwap(swap, 'accepted', req.user._id); activityAction = 'swap_accepted';
-        const conflicts = await Swap.find({ _id: { $ne: swap._id }, status: 'requested', $or: [{ offeredListing: { $in: [offered._id, requested._id] } }, { requestedListing: { $in: [offered._id, requested._id] } }] });
-        for (const conflict of conflicts) { transitionSwap(conflict, 'declined', req.user._id); await conflict.save(); }
-      }
+      transitionSwap(swap, 'declined', req.user._id); activityAction = 'swap_declined';
     } else if (action === 'withdraw') {
       if (String(swap.requester) !== String(req.user._id) || swap.status !== 'requested') throw new HttpError(409, 'Only your pending request can be withdrawn.');
       transitionSwap(swap, 'withdrawn', req.user._id); activityAction = 'swap_withdrawn';
@@ -542,8 +593,11 @@ app.patch('/api/admin/swaps/:id/resolve', requireUser, requireAdmin, requireCsrf
 app.get('/api/health', (_req, res) => res.json({ ok: mongoose.connection.readyState === 1, database: mongoose.connection.readyState === 1 ? 'connected' : 'unavailable' }));
 if (!process.env.VERCEL) {
   app.use(express.static(path.join(__dirname, '../public'), { index: false, maxAge: isProduction ? '1h' : 0, etag: true }));
-  app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
 }
+app.get('*', (req, res, next) => {
+  if (req.path === '/api' || req.path.startsWith('/api/')) return next();
+  res.sendFile(path.join(__dirname, '../public/index.html'));
+});
 app.use((err, _req, res, _next) => {
   const safe = err.status ? err : (err instanceof multer.MulterError ? new HttpError(400, 'Check the selected photo type, size, and count.') : err);
   sendError(res, safe);

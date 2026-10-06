@@ -8,7 +8,7 @@ A responsive clothing-exchange marketplace demo built with **HTML, CSS, browser 
 
 - Email/password registration and login; 12-character minimum; bcrypt hashing; server-side MongoDB sessions; session ID/CSRF rotation; HTTP-only, SameSite Strict cookies and Secure cookies on production/Vercel HTTPS deployments.
 - CSRF token and same-origin checks on state-changing requests, authentication/upload rate limits, bounded input, fixed enums, parameterized Mongo queries, HTML-escaped client rendering, administrator role gates.
-- Listing create/edit/remove with JPEG/PNG/WebP only, MIME signature verification, up to four photos at **1 MB each**. Member image bytes are stored in MongoDB, never in the application’s ephemeral local filesystem.
+- Listing create/edit/remove with JPEG/PNG/WebP input, MIME signature verification, and up to four photos at **1 MB each**. Uploads are re-encoded as WebP with EXIF and other source metadata removed, then stored in MongoDB—not in the application’s ephemeral local filesystem.
 - Direct swap request state changes with actor/time history, private persistent chat, numbered negotiated-terms revisions confirmed by both participants, and a separate two-member completion confirmation.
 - Same-city opportunities are ranked first; different-city alternatives are labeled. Matching uses member-entered city text and a clearly explained value gap, not GPS, radius, or geographic distance.
 - After mutual terms confirmation, the two participants may enter private manual hand-off/shipment notes (service label, reference, preference, and self-reported status). No public tracking page, courier API, booking, label/rate, payment, or carrier-verified delivery exists; provider integration remains **Partial**.
@@ -17,7 +17,7 @@ A responsive clothing-exchange marketplace demo built with **HTML, CSS, browser 
 
 ## Run locally
 
-Use **Node.js 20 or newer**. MongoDB is required for a normal application run; the server deliberately does not silently fall back to local files or an in-memory/file database.
+Use **Node.js 20.9 or newer** (the repository pins Node.js 22). MongoDB is required for a normal application run; the server deliberately does not silently fall back to local files or an in-memory/file database.
 
 1. Create a MongoDB database (a local MongoDB server or a MongoDB deployment).
 2. Copy `.env.example` to `.env` and fill in:
@@ -30,19 +30,19 @@ Use **Node.js 20 or newer**. MongoDB is required for a normal application run; t
 
 ## Tests
 
-`npm test` launches an ephemeral MongoDB test server and drives the Express API with HTTP integration tests. The ephemeral database is **test-only** and is never used as a production persistence fallback. The tests cover registration/login/password hashing, CSRF and origin checks, listing create/edit/remove and photo validation/storage, same-/different-city matching, participant-only messaging and shipment-note authorization, terms revision and completion gates, actor/time transition history, controlled 30-day analytics calculations, and administrator moderation.
+`npm test` launches a single-node MongoDB replica set and drives the Express API with HTTP integration tests. This **test-only** database is never used as a production persistence fallback. The tests cover direct page refreshes, registration/login/password hashing, CSRF and origin checks (including missing tokens), photo validation and EXIF removal, simultaneous attempts to accept overlapping swaps, same-/different-city matching, private messaging and shipment-note authorization, terms and completion gates, analytics, and administrator moderation.
 
 The app package intentionally has no hard-coded demo logins or admin password. There is no user self-service admin bootstrap endpoint.
 
-## Vercel preparation and deployment handoff
+## Production deployment
 
-Vercel is the intended host **only for the authorized noncommercial student demo**. Preparation is complete in source; **no Vercel project or deployment has been created, there is no live URL, and no environment secret was requested or entered**. Deployment remains on hold until the owner chooses the courier provider, as required. The app currently offers participant-entered shipment notes only; it has no courier integration. See [`DEPLOYMENT-HANDOFF.md`](DEPLOYMENT-HANDOFF.md) for the exact future handoff and release gates.
+The noncommercial student demo is live at the [production site](https://threadcycle-exchange-app.vercel.app/). It runs from the private GitHub repository `sidharthsuraj24-star/threadcycle-exchange-app`, branch `vercel-preparation`; keep `main` unchanged and the project private. Do not enable paid resources. Participant-entered shipment notes remain manual; the app has no courier integration, payment, booking, or carrier-verified delivery.
 
-Vercel detects the root [`index.js`](index.js) as the Express app entrypoint and runs it as a Function; no long-running `npm start` server is used in the deployment. Vercel serves files in `public/` from its CDN, so the Express `express.static()` middleware and local HTML fallback are kept for local development but skipped on Vercel. [`vercel.json`](vercel.json) applies the page security headers to the CDN-served HTML; API and Express responses continue to use Helmet.
+Vercel detects the root [`index.js`](index.js) as the Express Function entry point. Vercel serves files in `public/` from its CDN; Express's local static-file middleware is skipped on Vercel, but its GET fallback serves `public/index.html` for client-side routes and does not rewrite `/api` endpoints. This lets links such as `/login`, `/dashboard`, and `/messages/<id>` load directly or refresh. [`vercel.json`](vercel.json) provides security headers for CDN-served HTML, while Express responses retain Helmet.
 
-Vercel Functions cap each request and response body at **4.5 MB**. The app accepts up to four JPEG/PNG/WebP photos at 1 MB each (4 MB file bytes total, plus bounded multipart fields), while JSON remains capped at 64 KB and URL-encoded bodies at 16 KB. Photo bytes, server-side sessions, and short-lived request/auth rate-limit counters stay in MongoDB; counters are shared across Function instances and store only HMAC-keyed client identifiers, not raw IPs. There is no production disk or in-memory persistence fallback.
+Vercel Functions cap each request and response body at **4.5 MB**. The app accepts up to four source photos at 1 MB each and converts valid JPEG/PNG/WebP uploads to metadata-free WebP before storage. JSON remains capped at 64 KB and URL-encoded bodies at 16 KB. Listings, photos, sessions, and short-lived rate-limit counters stay in MongoDB; counters use HMAC-keyed client identifiers rather than raw IPs. There is no production disk or in-memory persistence fallback.
 
-For the handoff after the courier gate is resolved, use the **same private** repository `sidharthsuraj24-star/threadcycle-exchange-app` and the `vercel-preparation` branch. In Vercel project settings, leave the root directory at `.`, keep Express autodetection, use `npm ci` for installation, `npm run check` as the build command, leave the output directory and start command unset, and add the deployment environment variables listed in the handoff. Do not upgrade or enable paid resources under this demo authorization.
+Run `npm run check` and `npm test` before publishing branch changes. See [`DEPLOYMENT-HANDOFF.md`](DEPLOYMENT-HANDOFF.md) for current deployment constraints and verification notes; keep updates within the existing noncommercial demo and do not add paid resources or a courier provider without separate authorization.
 
 ## Promote the first administrator securely
 
@@ -62,6 +62,6 @@ For the handoff after the courier gate is resolved, use the **same private** rep
 - `docs/PRD.md` — product requirements, scope, and acceptance criteria.
 - `docs/REQUIREMENT-AUDIT.md` — current scorecard against both original briefs, including partial provider and deployment items.
 - `docs/TEST-PLAN.md` and `docs/TEST-EVIDENCE.md` — covered behaviors, local results, remaining verification, and deployment checklist.
-- `DEPLOYMENT-HANDOFF.md` — exact Vercel preparation status, future setup steps, and release gates.
+- `DEPLOYMENT-HANDOFF.md` — current Vercel deployment behavior, constraints, and verification notes.
 - `render.yaml` remains a legacy, unselected configuration; it is not the intended deployment target for this preparation.
 - `.env.example` — variable names and non-secret placeholders.

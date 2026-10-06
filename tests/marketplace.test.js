@@ -2,9 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const mongoose = require('mongoose');
 const supertest = require('supertest');
+const sharp = require('sharp');
 
 let mongo;
 let app;
@@ -23,14 +24,14 @@ let mainSwapId;
 let otherCityAgent;
 let outsider;
 let testClientIp = 20;
-const jpg = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9k=', 'base64');
+let uploadPhoto;
 async function csrf(agent) { return (await agent.get('/api/me').expect(200)).body.csrfToken; }
 async function createMember(agent, name, email, city) {
   const token = await csrf(agent);
   const response = await agent.post('/api/register').set('x-csrf-token', token).set('x-forwarded-for', `198.51.100.${testClientIp++}`).send({ name, email, city, password: 'A-safe-test-password-2026!' }).expect(201);
   return { user: response.body.user, csrf: response.body.csrfToken };
 }
-async function addListing(agent, token, overrides = {}) {
+async function addListing(agent, token, overrides = {}, photo = uploadPhoto) {
   const payload = {
     title: 'Soft cotton overshirt', category: 'Outerwear', size: 'M', brand: 'Field Notes', brandTier: 'Everyday', condition: 'Excellent',
     description: 'A well-cared-for cotton layer with one inside pocket.',
@@ -38,12 +39,13 @@ async function addListing(agent, token, overrides = {}) {
   };
   const req = agent.post('/api/listings').set('x-csrf-token', token);
   for (const [key, value] of Object.entries(payload)) req.field(key, value);
-  req.attach('images', jpg, { filename: 'garment.jpg', contentType: 'image/jpeg' });
+  req.attach('images', photo, { filename: 'garment.jpg', contentType: 'image/jpeg' });
   return (await req.expect(201)).body.item;
 }
 
 test('end-to-end marketplace flows use the MongoDB data models and persisted sessions', async (t) => {
-  mongo = await MongoMemoryServer.create();
+  mongo = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
+  uploadPhoto = await sharp({ create: { width: 8, height: 6, channels: 3, background: '#c84' } }).jpeg({ quality: 85 }).toBuffer();
   process.env.NODE_ENV = 'test';
   process.env.MONGODB_URI = mongo.getUri('clothing_swap_test');
   process.env.SESSION_SECRET = 'test-session-secret-long-enough-to-meet-minimum-32-bytes';
@@ -65,6 +67,11 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     const html = await agentA.get('/').expect(200);
     assert.match(html.text, /Second Loop/);
     assert.match(html.headers['content-security-policy'], /default-src 'self'/);
+    for (const route of ['/login', '/register', '/dashboard?tab=profile', '/matches', '/profile', '/admin', '/messages/example', '/swap/new', '/listings/example']) {
+      const page = await agentA.get(route).expect(200);
+      assert.match(page.text, /id="app"/, `${route} should serve the single-page app on a direct load`);
+    }
+    await agentA.get('/api/no-such-endpoint').expect(404);
     await agentA.get('/app.js').expect(200).expect('Content-Type', /javascript/);
     const result = await agentA.get('/api/listings');
     assert.equal(result.status, 200, JSON.stringify(result.body));
@@ -100,6 +107,7 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
 
   await t.test('same-site state changes reject requests without the session CSRF token', async () => {
     await agentA.patch('/api/profile').send({ name: 'Changed Name', city: 'Pune' }).expect(403);
+    await supertest(app).post('/api/login').send({ email: 'ada@example.test', password: 'A-safe-test-password-2026!' }).expect(403);
     await agentA.patch('/api/profile').set('Origin', 'https://attacker.invalid').set('x-csrf-token', csrfA).send({ name: 'Forged origin', city: 'Pune' }).expect(403);
     await agentA.patch('/api/profile').set('x-csrf-token', csrfA).send({ name: '<img src=x onerror=alert(1)>', city: 'Pune', bio: '<script>text</script>' }).expect(200);
     const profile = (await agentA.get('/api/profile').expect(200)).body.profile;
@@ -107,20 +115,29 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     assert.equal(profile.city, 'Pune');
   });
 
-  await t.test('listing creation validates photo type, estimates value server-side, and stores image bytes in MongoDB', async () => {
-    listingA = await addListing(agentA, csrfA, { estimatedValue: '49999', comparableRetailPrice: '4200' });
+  await t.test('listing creation validates photos, strips EXIF metadata, and preserves server-side value rules', async () => {
+    const locationJpg = await sharp({ create: { width: 8, height: 6, channels: 3, background: '#c84' } })
+      .withExif({ IFD0: { ImageDescription: 'GPS: 18.5204, 73.8567' } })
+      .jpeg().toBuffer();
+    const sourceMetadata = await sharp(locationJpg).metadata();
+    assert.ok(sourceMetadata.exif?.includes(Buffer.from('GPS: 18.5204, 73.8567')), 'fixture starts with location-like EXIF metadata');
+    listingA = await addListing(agentA, csrfA, { estimatedValue: '49999', comparableRetailPrice: '4200' }, locationJpg);
     assert.equal(listingA.imageCount, 1);
     assert.equal(listingA.estimatedValue, 1300, 'comparable retail price does not replace or affect the server estimate');
     assert.equal(listingA.comparableRetailPrice, 4200);
     const photo = await agentA.get(listingA.imageUrls[0]).expect(200);
-    assert.equal(photo.headers['content-type'], 'image/jpeg');
+    assert.equal(photo.headers['content-type'], 'image/webp');
     const doc = await Listing.findById(listingA.id).select('+images');
-    assert.equal(doc.images[0].data.length, jpg.length);
+    assert.equal(doc.images[0].mime, 'image/webp');
+    assert.notEqual(doc.images[0].data.toString('base64'), locationJpg.toString('base64'));
+    const storedMetadata = await sharp(doc.images[0].data).metadata();
+    assert.equal(storedMetadata.format, 'webp');
+    assert.equal(storedMetadata.exif, undefined, 're-encoded upload must not retain EXIF location data');
     const edited = agentA.patch(`/api/listings/${listingA.id}`).set('x-csrf-token', csrfA)
       .field('title', 'Updated cotton overshirt').field('category', 'Outerwear').field('size', 'M').field('brand', 'Field Notes')
       .field('brandTier', 'Premium').field('condition', 'Excellent').field('description', 'Updated listing text.')
       .field('comparableRetailPrice', '5100')
-      .attach('images', jpg, { filename: 'updated.jpg', contentType: 'image/jpeg' });
+      .attach('images', uploadPhoto, { filename: 'updated.jpg', contentType: 'image/jpeg' });
     listingA = (await edited.expect(200)).body.item;
     assert.equal(listingA.title, 'Updated cotton overshirt');
     assert.equal(listingA.estimatedValue, 1600);
@@ -136,7 +153,7 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     await bad.expect(400);
     const badPrice = agentA.post('/api/listings').set('x-csrf-token', csrfA)
       .field('title', 'Invalid comparable price').field('category', 'Tops').field('size', 'M').field('brand', 'X').field('brandTier', 'Everyday').field('condition', 'Good').field('description', 'Reject an out-of-range reference').field('comparableRetailPrice', '10000001')
-      .attach('images', jpg, { filename: 'bad-price.jpg', contentType: 'image/jpeg' });
+      .attach('images', uploadPhoto, { filename: 'bad-price.jpg', contentType: 'image/jpeg' });
     const rejectedPrice = await badPrice.expect(400);
     assert.match(rejectedPrice.body.error, /Comparable retail price/);
     const tooLargeBytes = Buffer.alloc(1_000_001);
@@ -361,11 +378,24 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     const firstCompetingRequest = await agentA.post('/api/swaps').set('x-csrf-token', csrfA).send({ offeredListingId: competingOffer.id, requestedListingId: sharedRequest.id }).expect(201);
     const otherCityCsrf = await csrf(otherCityAgent);
     const secondCompetingRequest = await otherCityAgent.post('/api/swaps').set('x-csrf-token', otherCityCsrf).send({ offeredListingId: competingOfferOther.id, requestedListingId: sharedRequest.id }).expect(201);
-    await agentB.patch(`/api/swaps/${firstCompetingRequest.body.swap.id}/status`).set('x-csrf-token', csrfB).send({ action: 'accept' }).expect(200);
-    const autoDeclined = await Swap.findById(secondCompetingRequest.body.swap.id).lean();
-    assert.equal(autoDeclined.status, 'declined');
-    assert.equal(autoDeclined.statusHistory[1].to, 'declined');
-    assert.equal(String(autoDeclined.statusHistory[1].actor), userB.id);
+    const [firstAccept, secondAccept] = await Promise.all([
+      agentB.patch(`/api/swaps/${firstCompetingRequest.body.swap.id}/status`).set('x-csrf-token', csrfB).send({ action: 'accept' }),
+      agentB.patch(`/api/swaps/${secondCompetingRequest.body.swap.id}/status`).set('x-csrf-token', csrfB).send({ action: 'accept' })
+    ]);
+    assert.deepEqual([firstAccept.status, secondAccept.status].sort(), [200, 409]);
+    const [firstStored, secondStored] = await Promise.all([
+      Swap.findById(firstCompetingRequest.body.swap.id).lean(),
+      Swap.findById(secondCompetingRequest.body.swap.id).lean()
+    ]);
+    const winner = firstStored.status === 'accepted' ? firstStored : secondStored;
+    const loser = firstStored.status === 'declined' ? firstStored : secondStored;
+    assert.equal(winner.status, 'accepted');
+    assert.equal(loser.status, 'declined');
+    assert.equal(loser.statusHistory[1].to, 'declined');
+    assert.equal(String(loser.statusHistory[1].actor), String(winner.recipient));
+    assert.equal((await Listing.findById(sharedRequest.id)).status, 'reserved');
+    assert.equal((await Listing.findById(winner.offeredListing)).status, 'reserved');
+    assert.equal((await Listing.findById(loser.offeredListing)).status, 'available', 'the losing swap must not reserve its unique offered item');
   });
 
   await t.test('rate-limit counters are shared by MongoDB-backed store instances without storing raw client keys', async () => {
