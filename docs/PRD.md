@@ -30,7 +30,7 @@ These pages are linked using browser routes and are mobile-responsive. Matching 
 - Member-supplied city text is a coarse matching aid. The application never requests browser location permission, stores GPS coordinates, or exposes a street address.
 - The displayed swap estimate is calculated server-side: **category guide × condition factor × brand-tier factor, rounded to the nearest ₹50**. Users see these factors and may negotiate. The result is not a cash price, appraisal, offer, or fairness guarantee.
 - A request links one available listing from each of two different real accounts. It creates a participant-only thread. Only its recipient can accept or decline; the requester can withdraw before a response.
-- The requester may record a **local**, **remote/shipping**, or **flexible** preference. It is a discussion hint only: the app does not book a courier, arrange a meeting, collect shipping fees, or track delivery.
+- The requester may record a **local**, **remote/shipping**, or **flexible** preference. It is a discussion hint only: the app does not book a courier, arrange a meeting, collect shipping fees, or track delivery. The supplied project specifications list courier integration for remote swaps as in-scope; that requirement remains **partially implemented**, not waived by this preference field.
 - On acceptance, both items become reserved. Either participant can ask for admin review. Both members must separately confirm before a swap is counted completed and the items are marked swapped.
 - A completion count indicates only two in-app confirmations. It does **not** verify that goods were delivered or exchanged in person.
 - Admin moderation actions are role-gated. Closing a dispute restores reserved items where appropriate; the administrator cannot mark an exchange complete on members’ behalf.
@@ -44,11 +44,11 @@ Photos accept JPEG, PNG, or WebP only, with signature verification after upload,
 
 ## KPIs
 
-The admin panel shows counts derived from database records only: registered non-demo members, available non-demo listings, swap requests, accepted swaps, disputes, and member-confirmed completions. Demo seed data is excluded. No climate impact, waste diversion, adoption, engagement, delivery, or successful trade claims are calculated.
+The admin panel shows counts derived from database records only: registered non-demo members, available non-demo listings, swap requests, accepted swaps, disputes, and member-confirmed completions. Demo seed data is excluded. The supplied specifications also request active users, user engagement, and swap-request conversion rate; these are **not implemented** because the application has no defined activity window or event instrumentation. No climate impact, waste diversion, adoption, delivery, or successful trade claims are calculated.
 
-## Out of scope
+## Explicit exclusions and unimplemented requirement
 
-Payments, sale checkout, pricing clothes for cash, courier integration or booking, GPS/location tracking, external identity verification, automated fashion recommendations, virtual try-on, mobile apps, and environmental impact claims are not included.
+Payments, sale checkout, pricing clothes for cash, GPS/location tracking, external identity verification, automated fashion recommendations, virtual try-on, native mobile apps, and environmental impact claims are not included. Courier integration is **not** an exclusion from the supplied project specifications: it is an unmet in-scope requirement. This implementation only records a remote/shipping preference; it has no courier provider/API, booking, label, shipment, or tracking integration.
 
 ## Acceptance criteria
 

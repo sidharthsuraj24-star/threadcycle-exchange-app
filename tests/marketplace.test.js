@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const mongoose = require('mongoose');
 const supertest = require('supertest');
@@ -147,6 +149,8 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     assert.equal((await agentB.get(`/api/swaps/${swapId}/messages`).expect(200)).body.messages.length, 2);
     await outsider.get(`/api/swaps/${swapId}/messages`).expect(404);
     await agentB.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfB).send({ action: 'accept' }).expect(200);
+    assert.equal((await Listing.findById(listingA.id)).status, 'reserved');
+    assert.equal((await Listing.findById(listingB.id)).status, 'reserved');
     await agentA.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfA).send({ action: 'confirm' }).expect(200);
     const pending = await Swap.findById(swapId).lean();
     assert.equal(pending.status, 'accepted');
@@ -204,6 +208,34 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     const result = await agentA.get('/api/health').expect(200);
     assert.deepEqual(result.body, { ok: true, database: 'connected' });
   });
+});
+
+test('dashboard escapes a member-controlled name before rendering HTML', async () => {
+  const appRoot = { innerHTML: '' };
+  const context = {
+    document: { getElementById: () => appRoot },
+    URL,
+    URLSearchParams,
+    location: { href: 'https://market.test/dashboard', origin: 'https://market.test' }
+  };
+  vm.createContext(context);
+  const frontend = fs.readFileSync(require.resolve('../public/app.js'), 'utf8');
+  const bootstrapOffset = frontend.indexOf("appRoot.addEventListener('submit', submitHandler);");
+  assert.ok(bootstrapOffset > 0, 'frontend bootstrap boundary exists');
+  vm.runInContext(frontend.slice(0, bootstrapOffset), context, { filename: 'public/app.js' });
+
+  const attackerName = '<img src=x onerror=alert(1)> Member';
+  context.attackerName = attackerName;
+  vm.runInContext(`
+    currentUser = { id: 'member-1', name: attackerName, city: 'Pune', role: 'member' };
+    api = async (url) => url === '/api/dashboard'
+      ? { listings: [], swaps: [] }
+      : { profile: { name: attackerName, email: 'member@example.test', city: 'Pune', bio: '' } };
+  `, context);
+  await vm.runInContext('renderDashboard(new URLSearchParams())', context);
+
+  assert.match(appRoot.innerHTML, /Hello, &lt;img/);
+  assert.doesNotMatch(appRoot.innerHTML, /Hello, <img/);
 });
 
 test.after(async () => {

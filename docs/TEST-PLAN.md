@@ -1,44 +1,52 @@
-# Test plan and current result
+# Test plan and latest result
 
-## Automated integration coverage
+## Automated coverage
 
-`npm test` starts a temporary MongoDB test instance, invokes the Express API via Supertest agents with real session cookies, and checks:
+`npm test` runs the Express API against a disposable MongoDB instance from `mongodb-memory-server`, using Supertest agents and real session cookies. The current suite covers:
 
-- labeled, non-interactive demo seed data and no demo password hashes;
-- password-length validation, register/login, bcrypt hashing, safe `/api/me` output, duplicate email handling, and failed-login behavior;
-- required CSRF and same-origin checks, plus escaped handling of markup-containing profile text;
-- listing create/edit/remove, MIME/signature validation, image bytes stored in MongoDB, photo URL removal after moderation, server-calculated value despite a forged client estimate, and SVG rejection;
-- coarse city browsing/matching, and proof that demo offers cannot be requested or used as actual match opportunities;
-- two-member request, withdraw/decline/accept transitions, non-binding local/remote preference, private chat visible only to participants, dual member confirmations, and items marked swapped only after the second confirmation;
-- ordinary-member denial from admin routes; admin member suspend/restore, listing hide/restore, dispute resolution without fabricated completion, record-based KPI counts; static HTML/CSP and safe health endpoint output.
+- Eight clearly labeled illustrative seed listings/profiles, no demo password hashes, and non-interactive demo offers.
+- Registration/login, password-length validation, bcrypt hashing, session rotation, public profile limits, duplicate email rejection, and failed login.
+- CSRF and same-origin rejection, profile update persistence, and safe handling of markup in profile data.
+- Listing create/edit/remove, photo MIME/signature checks, image bytes persisted in MongoDB, server-computed estimates despite a forged client estimate, and SVG rejection.
+- Coarse city filtering/matching and proof that demo offers cannot be requested or returned as real match candidates.
+- Swap creation, remote preference persistence (not courier integration), participant-only messaging, recipient accept, both listings reserved on acceptance, member confirmation, and completion only after the second confirmation.
+- Request withdrawal, recipient decline, dispute reporting, admin authorization, member suspend/restore, listing hide/restore, dispute closure without an admin attesting to a real exchange, and record-based KPI output.
+- Safe HTML output when a member-controlled name is rendered in the dashboard greeting; the test executes the frontend's actual dashboard template.
+- The static HTML/CSP and the credential-free health endpoint.
 
-**Important:** the test database is ephemeral and test-only. Passing tests do not prove that the production Atlas database or a public deployment exists.
+## Latest local verification
 
-## Manual verification after deployment
+Verified on **2026-10-06** in the project workspace:
 
-1. Check the home page, mobile layout, and demo badges; confirm demo offer CTA is disabled.
-2. Register two controlled member accounts; confirm registration works and sessions survive refresh.
-3. Create listings with valid JPEG/PNG/WebP and confirm a disallowed or oversized file is rejected.
-4. Verify category/city/text filters, detail pages, member-only matches, and profile city edits.
-5. Submit, withdraw, accept, and decline separate requests; confirm reserved state after acceptance.
-6. Send messages from both accounts and verify a third account cannot read the thread.
-7. Confirm only the two separate participant confirmations mark a swap completed.
-8. Promote an authorized owner with the trusted CLI command; verify admin can suspend/restore members, hide/restore a listing, and close a disputed request.
-9. Verify `/api/health` reports MongoDB connected from the public hostname over HTTPS and inspect production cookie flags.
+- `npm run check` — **passed**; Node.js syntax checks passed for `server/app.js`, `server/models.js`, `public/app.js`, and `server/index.js`.
+- `npm test` — **passed: 10 tests, 10 passed, 0 failed, 0 skipped**; the final recorded run took **5.091 seconds**. The suite used an ephemeral MongoDB test instance and stopped it after the run.
+- `git diff --check` — **passed** for the reviewed changes.
 
-## Current outcome
+The integration database is test-only. Passing these checks does not establish a durable production database or a deployed service. See [`TEST-EVIDENCE.md`](TEST-EVIDENCE.md) for the captured command output.
 
-Verified locally on 2026-10-06:
+## Known gaps not covered by these tests
 
-- `npm run check` — passed JavaScript parse checks.
-- `npm test` — passed, **9 tests; 9 passed; 0 failed**, about 5 seconds. The suite exercised the API with MongoDB 7.0.24 running in a disposable in-memory test instance and then shut it down.
-- No production Atlas connection was configured or used. The ephemeral test database is test-only and is not evidence of persisted production deployment.
-- No app URL was deployed or verified. Visual/manual browser acceptance and all post-deployment checks above remain outstanding.
+- No courier provider/API, booking, waybill, shipment status, or delivery tracking exists; tests only prove that `remote` is stored as a preference and reject an unsupported `courier-booked` enum.
+- There is no distinct two-member confirmation record for negotiated terms after chat; acceptance accepts the proposed pair, while the two-member confirmation is a completion assertion.
+- The admin screens show only the newest 30 users, listings, and swaps; the tests do not exercise pagination because none is implemented.
+- Active-user, engagement, and request-conversion analytics are not implemented. There is no activity-event instrumentation or defined active-user window.
+- There is no load/performance benchmark, automated browser/mobile viewport suite, live-provider integration test, production-database test, or deployment test.
+- A member-confirmed completion is only an in-app assertion; it does not verify physical delivery or exchange.
 
-## UI refinement verification (2026-10-06)
+## Manual verification after an authorized deployment
 
-- `npm run check` passed after the UI changes. `npm test` passed unchanged: **9 tests; 9 passed; 0 failed** against an ephemeral MongoDB 7.0.24 instance.
-- Browser smoke checks verified public discovery, category-chip filtering, preservation of active search/city filters when choosing a category, and an illustrative item detail page whose sample offer cannot receive swap requests.
-- Updated screenshots are included in `review-screenshots/`: desktop home at 1440 × 1100 and mobile home at 390 × 844. These show the existing sample content with its illustrative labels; they are not evidence of real users or exchanges.
-- The preview used only the existing labeled demo listings and a disposable database; no test members, real swaps, or production data were added. Automated password entry was blocked by the browser's protected-field control, so no browser registration was submitted. Registration and the authenticated listing, request, chat, matching, and admin flows remain covered by the original integration suite.
-- No public deployment was started. Atlas connection details and Render authorization remain outstanding, so the app has no verified public URL.
+These checks are **not run** in this audit because deployment and release were explicitly prohibited:
+
+1. Open the assigned HTTPS hostname at desktop and narrow/mobile widths; check the seven connected screen groups, menu, demo labels, and disabled sample-offer actions.
+2. Register two authorized test members; verify sessions survive refresh and profile city/name updates persist.
+3. Create and edit listings with JPEG/PNG/WebP photos; verify invalid, oversized, and excess images are rejected and valid images survive an app restart.
+4. Check text/category/size/city filters, listing details, and member-only city/value suggestions.
+5. Send, withdraw, accept, and decline requests; verify accepted items become reserved and disputed closure restores reserved items.
+6. Verify both participants can negotiate and a third account cannot read or write the thread; confirm the completion counter changes only after both member confirmations.
+7. Promote an authorized existing account through the trusted CLI process; verify admin-only member/listing/swap/dispute screens and controls.
+8. Verify `/api/health` reports a connected persistent MongoDB through the public hostname, and inspect production HTTPS/session cookie flags.
+9. Do not claim courier booking or tracking during deployment verification; no courier integration is present in this source.
+
+## Deployment status
+
+No deployment was performed or verified. No live URL is claimed. The project requires a configured persistent MongoDB URI and protected session secret, and a host/account authorization step; source configuration alone is not deployment evidence.
