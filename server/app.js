@@ -9,10 +9,13 @@ const mongoose = require('mongoose');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { User, Listing, Swap, Message, ActivityEvent } = require('./models');
+const { initializeDatabase } = require('./database');
+const { MongoRateLimitStore } = require('./rate-limit-store');
 const { estimateValue, CATEGORIES, CONDITIONS, BRANDS } = require('./value');
 
 const app = express();
-const isProduction = process.env.NODE_ENV === 'production';
+const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+if (isProduction && !process.env.MONGODB_URI) throw new Error('MONGODB_URI is required in production; application data and sessions must use MongoDB.');
 if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY));
 app.disable('x-powered-by');
 app.use(helmet({
@@ -25,6 +28,9 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: '64kb', strict: true }));
 app.use(express.urlencoded({ extended: false, limit: '16kb', parameterLimit: 40 }));
+app.use((_req, res, next) => {
+  initializeDatabase().then(() => next()).catch(() => res.status(503).json({ error: 'Marketplace data is temporarily unavailable.' }));
+});
 
 const sessionSecret = process.env.SESSION_SECRET || (process.env.NODE_ENV === 'test' ? 'test-session-secret-long-enough-to-meet-minimum-32-bytes' : '');
 if (!sessionSecret || Buffer.byteLength(sessionSecret) < 32) throw new Error('SESSION_SECRET must contain at least 32 bytes.');
@@ -43,8 +49,8 @@ if (process.env.MONGODB_URI) {
 }
 app.use(session(sessionOptions));
 app.locals.sessionStore = sessionStore;
-app.use('/api', rateLimit({ windowMs: 60_000, limit: 180, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many requests. Please try again in a minute.' } }));
-const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 8, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many sign-in attempts. Please wait 15 minutes.' } });
+app.use('/api', rateLimit({ windowMs: 60_000, limit: 180, store: new MongoRateLimitStore('api', sessionSecret), standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many requests. Please try again in a minute.' } }));
+const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 8, store: new MongoRateLimitStore('auth', sessionSecret), standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many sign-in attempts. Please wait 15 minutes.' } });
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const sendError = (res, error) => {
@@ -140,7 +146,7 @@ const validateImageBytes = (file) => {
   return { data: b, mime, bytes: b.length };
 };
 const storage = multer.memoryStorage();
-const upload = multer({ storage, limits: { fileSize: 1_250_000, files: 4, fields: 16, fieldSize: 1200 }, fileFilter: (_req, file, cb) => {
+const upload = multer({ storage, limits: { fileSize: 1_000_000, files: 4, fields: 16, fieldSize: 1200 }, fileFilter: (_req, file, cb) => {
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) return cb(new HttpError(400, 'Photos must be JPEG, PNG, or WebP; SVG and animated files are not accepted.'));
   cb(null, true);
 } });
@@ -244,7 +250,7 @@ app.get('/api/listings/:id/images/:index', async (req, res) => {
   } catch (e) { sendError(res, e); }
 });
 
-app.post('/api/listings', requireUser, requireCsrf, (req, res, next) => upload.array('images', 4)(req, res, (err) => err ? sendError(res, err instanceof multer.MulterError ? new HttpError(400, err.code === 'LIMIT_FILE_SIZE' ? 'Each photo must be 1.25 MB or smaller.' : 'Upload up to 4 photos.') : err) : next()), async (req, res) => {
+app.post('/api/listings', requireUser, requireCsrf, (req, res, next) => upload.array('images', 4)(req, res, (err) => err ? sendError(res, err instanceof multer.MulterError ? new HttpError(400, err.code === 'LIMIT_FILE_SIZE' ? 'Each photo must be 1 MB or smaller.' : 'Upload up to 4 photos.') : err) : next()), async (req, res) => {
   try {
     const fields = listingFilterFromBody(req.body, req.user.city);
     const images = imageFiles(req);
@@ -526,8 +532,10 @@ app.patch('/api/admin/swaps/:id/resolve', requireUser, requireAdmin, requireCsrf
 });
 
 app.get('/api/health', (_req, res) => res.json({ ok: mongoose.connection.readyState === 1, database: mongoose.connection.readyState === 1 ? 'connected' : 'unavailable' }));
-app.use(express.static(path.join(__dirname, '../public'), { index: false, maxAge: isProduction ? '1h' : 0, etag: true }));
-app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
+if (!process.env.VERCEL) {
+  app.use(express.static(path.join(__dirname, '../public'), { index: false, maxAge: isProduction ? '1h' : 0, etag: true }));
+  app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
+}
 app.use((err, _req, res, _next) => {
   const safe = err.status ? err : (err instanceof multer.MulterError ? new HttpError(400, 'Check the selected photo type, size, and count.') : err);
   sendError(res, safe);

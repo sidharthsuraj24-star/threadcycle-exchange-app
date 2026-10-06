@@ -116,9 +116,20 @@ const activityEventSchema = new Schema({
 activityEventSchema.index({ createdAt: 1, member: 1 });
 activityEventSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 35 });
 
+const rateLimitCounterSchema = new Schema({
+  store: { type: String, required: true },
+  key: { type: String, required: true },
+  totalHits: { type: Number, required: true, min: 0 },
+  resetTime: { type: Date, required: true },
+  expiresAt: { type: Date, required: true }
+}, { versionKey: false });
+rateLimitCounterSchema.index({ store: 1, key: 1 }, { unique: true });
+rateLimitCounterSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 const Listing = mongoose.models.Listing || mongoose.model('Listing', listingSchema);
 const Swap = mongoose.models.Swap || mongoose.model('Swap', swapSchema);
 const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
 const ActivityEvent = mongoose.models.ActivityEvent || mongoose.model('ActivityEvent', activityEventSchema);
-module.exports = { User, Listing, Swap, Message, ActivityEvent };
+const RateLimitCounter = mongoose.models.RateLimitCounter || mongoose.model('RateLimitCounter', rateLimitCounterSchema);
+module.exports = { User, Listing, Swap, Message, ActivityEvent, RateLimitCounter };

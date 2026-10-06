@@ -1,5 +1,4 @@
 require('dotenv').config();
-const mongoose = require('mongoose');
 
 const required = ['MONGODB_URI', 'SESSION_SECRET'];
 const missing = required.filter((key) => !process.env[key]);
@@ -11,22 +10,19 @@ if (Buffer.byteLength(process.env.SESSION_SECRET) < 32) {
   console.error('Startup blocked: SESSION_SECRET must contain at least 32 bytes.');
   process.exit(1);
 }
+
 const { app } = require('./app');
-const { seedDemoListings } = require('./seed');
-const { User, Listing, Swap, Message, ActivityEvent } = require('./models');
+const { initializeDatabase } = require('./database');
+const mongoose = require('mongoose');
 
 async function start() {
-  await mongoose.connect(process.env.MONGODB_URI, {
-    serverSelectionTimeoutMS: Number(process.env.DB_CONNECT_TIMEOUT_MS || 10000),
-    maxPoolSize: 10,
-    autoIndex: false
-  });
-  await Promise.all([User.createIndexes(), Listing.createIndexes(), Swap.createIndexes(), Message.createIndexes(), ActivityEvent.createIndexes()]);
-  if (process.env.SEED_DEMOS === 'true') await seedDemoListings();
+  await initializeDatabase();
   const port = Number(process.env.PORT || 3000);
   const server = app.listen(port, '0.0.0.0', () => console.log(`Clothing swap app listening on port ${port}`));
   const stop = async () => {
     server.close(async () => {
+      const store = app.locals.sessionStore;
+      if (store?.close) await store.close();
       await mongoose.disconnect();
       process.exit(0);
     });

@@ -48,7 +48,7 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
   process.env.MONGODB_URI = mongo.getUri('clothing_swap_test');
   process.env.SESSION_SECRET = 'test-session-secret-long-enough-to-meet-minimum-32-bytes';
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
-  const { User, Listing, Swap, ActivityEvent } = require('../server/models');
+  const { User, Listing, Swap, ActivityEvent, RateLimitCounter } = require('../server/models');
   await Promise.all([User.createIndexes(), Listing.createIndexes(), Swap.createIndexes()]);
   app = require('../server/app').app;
   app.set('trust proxy', 1);
@@ -58,6 +58,10 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
   agentB = supertest.agent(app);
 
   await t.test('server boots with explicitly labelled sample items, not demo accounts', async () => {
+    assert.equal(require('../index'), app, 'the root entrypoint exports the Express app for Vercel');
+    const vercelConfig = JSON.parse(fs.readFileSync(require.resolve('../vercel.json'), 'utf8'));
+    assert.deepEqual(vercelConfig.headers.map((rule) => rule.source), ['/', '/index.html']);
+    assert.ok(vercelConfig.headers.every((rule) => rule.headers.some((header) => header.key === 'Content-Security-Policy')));
     const html = await agentA.get('/').expect(200);
     assert.match(html.text, /Second Loop/);
     assert.match(html.headers['content-security-policy'], /default-src 'self'/);
@@ -126,6 +130,13 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
       .field('title', 'Bad photo').field('category', 'Tops').field('size', 'M').field('brand', 'X').field('brandTier', 'Everyday').field('condition', 'Good').field('description', 'No SVG uploads')
       .attach('images', Buffer.from('<svg onload="alert(1)"></svg>'), { filename: 'bad.svg', contentType: 'image/svg+xml' });
     await bad.expect(400);
+    const tooLargeBytes = Buffer.alloc(1_000_001);
+    Buffer.from([0xff, 0xd8, 0xff]).copy(tooLargeBytes);
+    const tooLarge = agentA.post('/api/listings').set('x-csrf-token', csrfA)
+      .field('title', 'Oversized photo').field('category', 'Tops').field('size', 'M').field('brand', 'X').field('brandTier', 'Everyday').field('condition', 'Good').field('description', 'Check upload limit')
+      .attach('images', tooLargeBytes, { filename: 'oversized.jpg', contentType: 'image/jpeg' });
+    const tooLargeResponse = await tooLarge.expect(400);
+    assert.match(tooLargeResponse.body.error, /1 MB or smaller/);
   });
 
   await t.test('analytics report an unavailable request-conversion rate when there are no requests', async () => {
@@ -343,6 +354,24 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     assert.equal(autoDeclined.status, 'declined');
     assert.equal(autoDeclined.statusHistory[1].to, 'declined');
     assert.equal(String(autoDeclined.statusHistory[1].actor), userB.id);
+  });
+
+  await t.test('rate-limit counters are shared by MongoDB-backed store instances without storing raw client keys', async () => {
+    const { MongoRateLimitStore } = require('../server/rate-limit-store');
+    const key = '203.0.113.220';
+    const storeA = new MongoRateLimitStore('shared-test', process.env.SESSION_SECRET);
+    const storeB = new MongoRateLimitStore('shared-test', process.env.SESSION_SECRET);
+    storeA.init({ windowMs: 60_000 });
+    storeB.init({ windowMs: 60_000 });
+    assert.equal((await storeA.increment(key)).totalHits, 1);
+    const secondHit = await storeB.increment(key);
+    assert.equal(secondHit.totalHits, 2);
+    const stored = await RateLimitCounter.findOne({ store: 'shared-test' }).lean();
+    assert.notEqual(stored.key, key);
+    assert.match(stored.key, /^[a-f0-9]{64}$/);
+    assert.ok(stored.expiresAt instanceof Date);
+    await storeB.resetKey(key);
+    assert.equal(await storeA.get(key), undefined);
   });
 
   await t.test('public health check does not expose database credentials', async () => {
