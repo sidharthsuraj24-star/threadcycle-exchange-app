@@ -42,6 +42,34 @@ const listingSchema = new Schema({
 }, { versionKey: false });
 listingSchema.index({ category: 1, size: 1, city: 1, status: 1, createdAt: -1 });
 
+const transitionSchema = new Schema({
+  from: { type: String, enum: ['none', 'requested', 'accepted', 'declined', 'withdrawn', 'completed', 'disputed'], required: true },
+  to: { type: String, enum: ['requested', 'accepted', 'declined', 'withdrawn', 'completed', 'disputed'], required: true },
+  actor: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  at: { type: Date, required: true, default: Date.now }
+}, { _id: false });
+const agreementConfirmationSchema = new Schema({
+  member: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  at: { type: Date, required: true, default: Date.now }
+}, { _id: false });
+const completionConfirmationSchema = new Schema({
+  member: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  at: { type: Date, required: true, default: Date.now }
+}, { _id: false });
+const agreementSchema = new Schema({
+  revision: { type: Number, required: true },
+  terms: { type: String, required: true, maxlength: 1000 },
+  proposedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  proposedAt: { type: Date, required: true, default: Date.now },
+  confirmedBy: { type: [agreementConfirmationSchema], default: [] }
+}, { _id: false });
+const shipmentTransitionSchema = new Schema({
+  from: { type: String, enum: ['not_started', 'dispatched', 'in_transit', 'delivered', 'issue', 'not_applicable'], required: true },
+  to: { type: String, enum: ['not_started', 'dispatched', 'in_transit', 'delivered', 'issue', 'not_applicable'], required: true },
+  actor: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  at: { type: Date, required: true, default: Date.now }
+}, { _id: false });
+
 const swapSchema = new Schema({
   requester: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   recipient: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -50,7 +78,18 @@ const swapSchema = new Schema({
   note: { type: String, default: '', trim: true, maxlength: 600 },
   handoffPreference: { type: String, enum: ['local', 'remote', 'flexible'], default: 'flexible' },
   status: { type: String, enum: ['requested', 'accepted', 'declined', 'withdrawn', 'completed', 'disputed'], default: 'requested', index: true },
+  statusHistory: { type: [transitionSchema], default: [] },
+  agreements: { type: [agreementSchema], default: [] },
   confirmedBy: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+  completionConfirmations: { type: [completionConfirmationSchema], default: [] },
+  shipment: {
+    serviceLabel: { type: String, default: '', maxlength: 80 },
+    trackingReference: { type: String, default: '', maxlength: 120 },
+    status: { type: String, enum: ['not_started', 'dispatched', 'in_transit', 'delivered', 'issue', 'not_applicable'], default: 'not_started' },
+    updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    updatedAt: { type: Date, default: null },
+    history: { type: [shipmentTransitionSchema], default: [] }
+  },
   adminNote: { type: String, default: '', maxlength: 600 },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
@@ -65,8 +104,21 @@ const messageSchema = new Schema({
 }, { versionKey: false });
 messageSchema.index({ swap: 1, createdAt: 1 });
 
+const activityEventSchema = new Schema({
+  member: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  action: { type: String, required: true, enum: [
+    'account_registered', 'profile_updated', 'listing_created', 'listing_updated', 'listing_removed',
+    'swap_requested', 'swap_accepted', 'swap_declined', 'swap_withdrawn', 'message_sent',
+    'agreement_proposed', 'agreement_confirmed', 'completion_confirmed', 'dispute_reported', 'shipment_updated'
+  ] },
+  createdAt: { type: Date, required: true, default: Date.now }
+}, { versionKey: false });
+activityEventSchema.index({ createdAt: 1, member: 1 });
+activityEventSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 35 });
+
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 const Listing = mongoose.models.Listing || mongoose.model('Listing', listingSchema);
 const Swap = mongoose.models.Swap || mongoose.model('Swap', swapSchema);
 const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
-module.exports = { User, Listing, Swap, Message };
+const ActivityEvent = mongoose.models.ActivityEvent || mongoose.model('ActivityEvent', activityEventSchema);
+module.exports = { User, Listing, Swap, Message, ActivityEvent };

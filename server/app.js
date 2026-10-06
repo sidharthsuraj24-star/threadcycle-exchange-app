@@ -8,7 +8,7 @@ const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { User, Listing, Swap, Message } = require('./models');
+const { User, Listing, Swap, Message, ActivityEvent } = require('./models');
 const { estimateValue, CATEGORIES, CONDITIONS, BRANDS } = require('./value');
 
 const app = express();
@@ -96,6 +96,35 @@ async function requireUser(req, res, next) {
 const requireAdmin = (req, res, next) => req.user?.role === 'admin' ? next() : sendError(res, new HttpError(403, 'Administrator access is required.'));
 const isParticipant = (swap, userId) => String(swap.requester) === String(userId) || String(swap.recipient) === String(userId);
 const completedStatuses = ['declined', 'withdrawn', 'completed'];
+const transitionSwap = (swap, nextStatus, actor, at = new Date()) => {
+  if (swap.status === nextStatus) return false;
+  swap.statusHistory.push({ from: swap.status, to: nextStatus, actor, at });
+  swap.status = nextStatus;
+  swap.updatedAt = at;
+  return true;
+};
+const recordActivity = (member, action) => ActivityEvent.create({ member, action });
+const swapPrivateState = (swap, memberId) => {
+  const currentAgreement = swap.agreements?.[swap.agreements.length - 1];
+  const agreedMemberIds = new Set((currentAgreement?.confirmedBy || []).map((entry) => String(entry.member)));
+  const participantIds = [swap.requester, swap.recipient].map((participant) => String(participant?._id || participant));
+  return {
+    statusHistory: (swap.statusHistory || []).map((entry) => ({ from: entry.from, to: entry.to, actorId: String(entry.actor), at: entry.at })),
+    agreements: (swap.agreements || []).map((agreement) => ({
+      revision: agreement.revision, terms: agreement.terms, proposedBy: String(agreement.proposedBy), proposedAt: agreement.proposedAt,
+      confirmedBy: (agreement.confirmedBy || []).map((entry) => ({ memberId: String(entry.member), at: entry.at }))
+    })),
+    agreementConfirmed: Boolean(currentAgreement && participantIds.every((id) => agreedMemberIds.has(id))),
+    myAgreementConfirmed: Boolean(currentAgreement && agreedMemberIds.has(String(memberId))),
+    completionConfirmations: (swap.completionConfirmations || []).map((entry) => ({ memberId: String(entry.member), at: entry.at })),
+    shipment: {
+      serviceLabel: swap.shipment?.serviceLabel || '', trackingReference: swap.shipment?.trackingReference || '',
+      status: swap.shipment?.status || 'not_started', updatedBy: swap.shipment?.updatedBy ? String(swap.shipment.updatedBy) : null,
+      updatedAt: swap.shipment?.updatedAt || null,
+      history: (swap.shipment?.history || []).map((entry) => ({ from: entry.from, to: entry.to, actorId: String(entry.actor), at: entry.at }))
+    }
+  };
+};
 const getSwapForUser = async (id, userId) => {
   const swap = await Swap.findById(parseId(id, 'Swap'));
   if (!swap || !isParticipant(swap, userId)) throw new HttpError(404, 'Swap not found.');
@@ -149,6 +178,7 @@ app.post('/api/register', authLimiter, requireCsrf, async (req, res) => {
     if (await User.exists({ email })) throw new HttpError(409, 'An account already exists for that email.');
     const user = await User.create({ name, email, passwordHash: await bcrypt.hash(password, 12), city });
     await logIn(req, user);
+    await recordActivity(user._id, 'account_registered');
     res.status(201).json({ user: userView(user), csrfToken: req.session.csrfToken });
   } catch (e) {
     if (e.code === 11000) return sendError(res, new HttpError(409, 'An account already exists for that email.'));
@@ -219,6 +249,7 @@ app.post('/api/listings', requireUser, requireCsrf, (req, res, next) => upload.a
     const fields = listingFilterFromBody(req.body, req.user.city);
     const images = imageFiles(req);
     const item = await Listing.create({ ...fields, owner: req.user._id, images, imageCount: images.length });
+    await recordActivity(req.user._id, 'listing_created');
     res.status(201).json({ item: listingView(item, req.user) });
   } catch (e) { sendError(res, e); }
 });
@@ -232,6 +263,7 @@ app.patch('/api/listings/:id', requireUser, requireCsrf, (req, res, next) => upl
     if (images.length) { item.images = images; item.imageCount = images.length; }
     item.updatedAt = new Date();
     await item.save();
+    await recordActivity(req.user._id, 'listing_updated');
     res.json({ item: listingView(item, req.user) });
   } catch (e) { sendError(res, e); }
 });
@@ -241,6 +273,7 @@ app.delete('/api/listings/:id', requireUser, requireCsrf, async (req, res) => {
     if (!item || String(item.owner) !== String(req.user._id) || item.isDemo) throw new HttpError(404, 'Item not found.');
     if (item.status === 'reserved') throw new HttpError(409, 'This item is part of an accepted swap.');
     item.status = 'removed'; await item.save();
+    await recordActivity(req.user._id, 'listing_removed');
     res.json({ ok: true });
   } catch (e) { sendError(res, e); }
 });
@@ -250,13 +283,19 @@ app.get('/api/matches', requireUser, async (req, res) => {
     const city = optionalText(req.query.city || req.user.city, 60);
     const own = await Listing.find({ owner: req.user._id, status: 'available' }).select('estimatedValue').lean();
     const targetValues = own.map((i) => i.estimatedValue);
-    const listings = await Listing.find({ owner: { $ne: req.user._id }, status: 'available', isDemo: false }).select('-images').sort({ createdAt: -1 }).limit(100).populate('owner', 'name city isDemo demoLabel');
+    const baseQuery = { owner: { $ne: req.user._id }, status: 'available', isDemo: false };
+    const cityPattern = city ? new RegExp(`^${city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') : null;
+    const [sameCityListings, otherListings] = await Promise.all([
+      Listing.find(cityPattern ? { ...baseQuery, city: cityPattern } : baseQuery).select('-images').sort({ createdAt: -1 }).limit(100).populate('owner', 'name city isDemo demoLabel'),
+      cityPattern ? Listing.find({ ...baseQuery, $nor: [{ city: cityPattern }] }).select('-images').sort({ createdAt: -1 }).limit(100).populate('owner', 'name city isDemo demoLabel') : []
+    ]);
+    const listings = cityPattern ? [...sameCityListings, ...otherListings] : sameCityListings;
     const matches = listings.map((i) => {
       const gap = targetValues.length ? Math.min(...targetValues.map((v) => Math.abs(v - i.estimatedValue) / Math.max(v, i.estimatedValue, 1))) : 1;
       const sameCity = city && i.city.toLocaleLowerCase() === city.toLocaleLowerCase();
       return { item: listingView(i), sameCity: Boolean(sameCity), valueGap: Math.round(gap * 100), matchScore: Math.max(0, Math.round((sameCity ? 60 : 0) + (1 - Math.min(gap, 1)) * 40)) };
     }).sort((a, b) => b.matchScore - a.matchScore || b.item.createdAt - a.item.createdAt).slice(0, 24);
-    res.json({ items: matches, cityMatched: Boolean(city), locationMethod: 'User-entered city text only. No GPS, street address, or live-distance lookup.' });
+    res.json({ items: matches, cityMatched: Boolean(city), locationMethod: 'Exact city-level matching from member-entered city names; not geospatial, distance, radius, GPS, or street-address matching.' });
   } catch (e) { sendError(res, e); }
 });
 
@@ -269,8 +308,10 @@ app.post('/api/swaps', requireUser, requireCsrf, async (req, res) => {
     if (await User.exists({ _id: requestedListing.owner, suspended: true })) throw new HttpError(409, 'That member is not accepting swap requests.');
     const duplicate = await Swap.exists({ requester: req.user._id, recipient: requestedListing.owner, offeredListing: offeredListing._id, requestedListing: requestedListing._id, status: { $in: ['requested', 'accepted'] } });
     if (duplicate) throw new HttpError(409, 'This swap request is already active.');
-    const swap = await Swap.create({ requester: req.user._id, recipient: requestedListing.owner, offeredListing: offeredListing._id, requestedListing: requestedListing._id, note: optionalText(req.body.note, 600), handoffPreference: enumValue(req.body.handoffPreference || 'flexible', ['local', 'remote', 'flexible'], 'exchange preference') });
+    const createdAt = new Date();
+    const swap = await Swap.create({ requester: req.user._id, recipient: requestedListing.owner, offeredListing: offeredListing._id, requestedListing: requestedListing._id, note: optionalText(req.body.note, 600), handoffPreference: enumValue(req.body.handoffPreference || 'flexible', ['local', 'remote', 'flexible'], 'exchange preference'), createdAt, updatedAt: createdAt, statusHistory: [{ from: 'none', to: 'requested', actor: req.user._id, at: createdAt }] });
     await Message.create({ swap: swap._id, sender: req.user._id, body: 'Swap request sent. Use this private thread to discuss the exchange details.' });
+    await recordActivity(req.user._id, 'swap_requested');
     res.status(201).json({ swap: { id: String(swap._id), status: swap.status } });
   } catch (e) { sendError(res, e); }
 });
@@ -278,7 +319,7 @@ app.get('/api/swaps', requireUser, async (req, res) => {
   try {
     const swaps = await Swap.find({ $or: [{ requester: req.user._id }, { recipient: req.user._id }] }).sort({ updatedAt: -1 }).limit(100)
       .populate('requester', 'name city').populate('recipient', 'name city').populate('offeredListing', 'title category size estimatedValue imageCount demoImageNo isDemo status').populate('requestedListing', 'title category size estimatedValue imageCount demoImageNo isDemo status');
-    res.json({ swaps: swaps.map((s) => ({ id: String(s._id), status: s.status, note: s.note, handoffPreference: s.handoffPreference, createdAt: s.createdAt, updatedAt: s.updatedAt, requester: userView(s.requester), recipient: userView(s.recipient), offeredListing: s.offeredListing && listingView(s.offeredListing, s.requester), requestedListing: s.requestedListing && listingView(s.requestedListing, s.recipient), confirmed: s.confirmedBy.map(String).includes(String(req.user._id)) })) });
+    res.json({ swaps: swaps.map((s) => ({ id: String(s._id), status: s.status, note: s.note, handoffPreference: s.handoffPreference, createdAt: s.createdAt, updatedAt: s.updatedAt, requester: userView(s.requester), recipient: userView(s.recipient), offeredListing: s.offeredListing && listingView(s.offeredListing, s.requester), requestedListing: s.requestedListing && listingView(s.requestedListing, s.recipient), confirmed: s.confirmedBy.map(String).includes(String(req.user._id)), ...swapPrivateState(s, req.user._id) })) });
   } catch (e) { sendError(res, e); }
 });
 app.patch('/api/swaps/:id/status', requireUser, requireCsrf, async (req, res) => {
@@ -286,33 +327,100 @@ app.patch('/api/swaps/:id/status', requireUser, requireCsrf, async (req, res) =>
     const swap = await Swap.findById(parseId(req.params.id, 'Swap'));
     if (!swap || !isParticipant(swap, req.user._id)) throw new HttpError(404, 'Swap not found.');
     const action = req.body.action;
+    let activityAction = null;
     if (action === 'accept' || action === 'decline') {
       if (String(swap.recipient) !== String(req.user._id) || swap.status !== 'requested') throw new HttpError(409, 'Only the recipient can respond to a pending request.');
-      if (action === 'decline') swap.status = 'declined';
+      if (action === 'decline') { transitionSwap(swap, 'declined', req.user._id); activityAction = 'swap_declined'; }
       else {
         const [offered, requested] = await Promise.all([Listing.findById(swap.offeredListing), Listing.findById(swap.requestedListing)]);
         if (!offered || !requested || offered.status !== 'available' || requested.status !== 'available') throw new HttpError(409, 'One of these items is no longer available.');
         offered.status = 'reserved'; requested.status = 'reserved'; await Promise.all([offered.save(), requested.save()]);
-        swap.status = 'accepted';
-        await Swap.updateMany({ _id: { $ne: swap._id }, status: 'requested', $or: [{ offeredListing: { $in: [offered._id, requested._id] } }, { requestedListing: { $in: [offered._id, requested._id] } }] }, { $set: { status: 'declined', updatedAt: new Date() } });
+        transitionSwap(swap, 'accepted', req.user._id); activityAction = 'swap_accepted';
+        const conflicts = await Swap.find({ _id: { $ne: swap._id }, status: 'requested', $or: [{ offeredListing: { $in: [offered._id, requested._id] } }, { requestedListing: { $in: [offered._id, requested._id] } }] });
+        for (const conflict of conflicts) { transitionSwap(conflict, 'declined', req.user._id); await conflict.save(); }
       }
     } else if (action === 'withdraw') {
       if (String(swap.requester) !== String(req.user._id) || swap.status !== 'requested') throw new HttpError(409, 'Only your pending request can be withdrawn.');
-      swap.status = 'withdrawn';
+      transitionSwap(swap, 'withdrawn', req.user._id); activityAction = 'swap_withdrawn';
     } else if (action === 'confirm') {
       if (swap.status !== 'accepted') throw new HttpError(409, 'Both members can confirm only an accepted swap.');
-      if (!swap.confirmedBy.some((id) => String(id) === String(req.user._id))) swap.confirmedBy.push(req.user._id);
+      const latestAgreement = swap.agreements[swap.agreements.length - 1];
+      const agreedIds = new Set((latestAgreement?.confirmedBy || []).map((entry) => String(entry.member)));
+      if (!latestAgreement || ![swap.requester, swap.recipient].every((id) => agreedIds.has(String(id)))) throw new HttpError(409, 'Both participants must confirm the current negotiated terms before either can confirm completion.');
+      if (!swap.confirmedBy.some((id) => String(id) === String(req.user._id))) {
+        const confirmedAt = new Date();
+        swap.confirmedBy.push(req.user._id);
+        swap.completionConfirmations.push({ member: req.user._id, at: confirmedAt });
+        activityAction = 'completion_confirmed';
+      }
       if ([swap.requester, swap.recipient].every((id) => swap.confirmedBy.some((confirmId) => String(confirmId) === String(id)))) {
-        swap.status = 'completed';
+        transitionSwap(swap, 'completed', req.user._id);
         await Listing.updateMany({ _id: { $in: [swap.offeredListing, swap.requestedListing] } }, { $set: { status: 'swapped', updatedAt: new Date() } });
       }
     } else if (action === 'dispute') {
       if (!['requested', 'accepted'].includes(swap.status)) throw new HttpError(409, 'This swap cannot be disputed in its current state.');
-      swap.status = 'disputed';
+      transitionSwap(swap, 'disputed', req.user._id); activityAction = 'dispute_reported';
       swap.adminNote = 'A participant asked an administrator to review this swap.';
     } else throw new HttpError(400, 'Choose a valid swap action.');
     swap.updatedAt = new Date(); await swap.save();
+    if (activityAction) await recordActivity(req.user._id, activityAction);
     res.json({ swap: { id: String(swap._id), status: swap.status, confirmed: swap.confirmedBy.length } });
+  } catch (e) { sendError(res, e); }
+});
+app.patch('/api/swaps/:id/agreement', requireUser, requireCsrf, async (req, res) => {
+  try {
+    const swap = await getSwapForUser(req.params.id, req.user._id);
+    if (swap.status !== 'accepted') throw new HttpError(409, 'Negotiated terms can be proposed or confirmed only after the request is accepted.');
+    let revisionCreated = false;
+    if (req.body.action === 'propose') {
+      const terms = safeText(req.body.terms, 1000, 'Agreed terms');
+      const participants = [String(swap.requester), String(swap.recipient)];
+      const messageAuthors = await Message.distinct('sender', { swap: swap._id, sender: { $in: participants } });
+      if (!participants.every((id) => messageAuthors.map(String).includes(id))) throw new HttpError(409, 'Both participants must exchange at least one message before proposing final terms.');
+      const current = swap.agreements[swap.agreements.length - 1];
+      if (!current || current.terms !== terms) {
+        swap.agreements.push({ revision: (current?.revision || 0) + 1, terms, proposedBy: req.user._id, proposedAt: new Date(), confirmedBy: [] });
+        swap.updatedAt = new Date();
+        await swap.save();
+        await recordActivity(req.user._id, 'agreement_proposed');
+        revisionCreated = true;
+      }
+    } else if (req.body.action === 'confirm') {
+      const current = swap.agreements[swap.agreements.length - 1];
+      if (!current) throw new HttpError(409, 'There are no negotiated terms to confirm yet.');
+      if (!current.confirmedBy.some((entry) => String(entry.member) === String(req.user._id))) {
+        current.confirmedBy.push({ member: req.user._id, at: new Date() });
+        swap.updatedAt = new Date(); await swap.save();
+        await recordActivity(req.user._id, 'agreement_confirmed');
+      }
+    } else throw new HttpError(400, 'Choose propose or confirm for negotiated terms.');
+    res.json({ swap: { id: String(swap._id), ...swapPrivateState(swap, req.user._id) }, revisionCreated });
+  } catch (e) { sendError(res, e); }
+});
+app.patch('/api/swaps/:id/shipment', requireUser, requireCsrf, async (req, res) => {
+  try {
+    const swap = await getSwapForUser(req.params.id, req.user._id);
+    const currentAgreement = swap.agreements[swap.agreements.length - 1];
+    const agreedIds = new Set((currentAgreement?.confirmedBy || []).map((entry) => String(entry.member)));
+    if (swap.status !== 'accepted' || !currentAgreement || ![swap.requester, swap.recipient].every((id) => agreedIds.has(String(id)))) throw new HttpError(409, 'Private shipment notes are available only after both participants confirm the negotiated terms.');
+    const status = enumValue(req.body.status, ['not_started', 'dispatched', 'in_transit', 'delivered', 'issue', 'not_applicable'], 'shipment status');
+    const preference = req.body.preference === undefined ? swap.handoffPreference : enumValue(req.body.preference, ['local', 'remote', 'flexible'], 'exchange preference');
+    const readOptional = (value, max, field) => value === undefined || value === '' ? '' : safeText(value, max, field);
+    const serviceLabel = readOptional(req.body.serviceLabel, 80, 'Carrier or service label');
+    const trackingReference = readOptional(req.body.trackingReference, 120, 'Tracking reference');
+    const previousStatus = swap.shipment.status || 'not_started';
+    const now = new Date();
+    if (status !== previousStatus) swap.shipment.history.push({ from: previousStatus, to: status, actor: req.user._id, at: now });
+    swap.shipment.status = status;
+    swap.shipment.serviceLabel = serviceLabel;
+    swap.shipment.trackingReference = trackingReference;
+    swap.shipment.updatedBy = req.user._id;
+    swap.shipment.updatedAt = now;
+    swap.handoffPreference = preference;
+    swap.updatedAt = now;
+    await swap.save();
+    await recordActivity(req.user._id, 'shipment_updated');
+    res.json({ swap: { id: String(swap._id), handoffPreference: swap.handoffPreference, ...swapPrivateState(swap, req.user._id) } });
   } catch (e) { sendError(res, e); }
 });
 app.get('/api/swaps/:id/messages', requireUser, async (req, res) => {
@@ -329,6 +437,7 @@ app.post('/api/swaps/:id/messages', requireUser, requireCsrf, async (req, res) =
     const body = safeText(req.body.body, 1200, 'Message');
     const message = await Message.create({ swap: swap._id, sender: req.user._id, body });
     swap.updatedAt = new Date(); await swap.save();
+    await recordActivity(req.user._id, 'message_sent');
     res.status(201).json({ message: { id: String(message._id), body: message.body, createdAt: message.createdAt } });
   } catch (e) { sendError(res, e); }
 });
@@ -340,6 +449,7 @@ app.patch('/api/profile', requireUser, requireCsrf, async (req, res) => {
     req.user.city = safeText(req.body.city, 60, 'City');
     req.user.bio = optionalText(req.body.bio, 300);
     await req.user.save();
+    await recordActivity(req.user._id, 'profile_updated');
     res.json({ user: userView(req.user) });
   } catch (e) { sendError(res, e); }
 });
@@ -350,21 +460,37 @@ app.get('/api/dashboard', requireUser, async (req, res) => {
       Swap.find({ $or: [{ requester: req.user._id }, { recipient: req.user._id }] }).sort({ updatedAt: -1 }).limit(100)
         .populate('requester', 'name city').populate('recipient', 'name city').populate('offeredListing', 'title category size estimatedValue imageCount demoImageNo isDemo status').populate('requestedListing', 'title category size estimatedValue imageCount demoImageNo isDemo status')
     ]);
-    res.json({ listings: listings.map((i) => listingView(i)), swaps: swaps.map((s) => ({ id: String(s._id), status: s.status, note: s.note, handoffPreference: s.handoffPreference, createdAt: s.createdAt, updatedAt: s.updatedAt, requester: userView(s.requester), recipient: userView(s.recipient), offeredListing: s.offeredListing && listingView(s.offeredListing, s.requester), requestedListing: s.requestedListing && listingView(s.requestedListing, s.recipient), confirmed: s.confirmedBy.some((id) => String(id) === String(req.user._id)) })) });
+    res.json({ listings: listings.map((i) => listingView(i)), swaps: swaps.map((s) => ({ id: String(s._id), status: s.status, note: s.note, handoffPreference: s.handoffPreference, createdAt: s.createdAt, updatedAt: s.updatedAt, requester: userView(s.requester), recipient: userView(s.recipient), offeredListing: s.offeredListing && listingView(s.offeredListing, s.requester), requestedListing: s.requestedListing && listingView(s.requestedListing, s.recipient), confirmed: s.confirmedBy.some((id) => String(id) === String(req.user._id)), ...swapPrivateState(s, req.user._id) })) });
   } catch (e) { sendError(res, e); }
 });
 
 app.get('/api/admin/overview', requireUser, requireAdmin, async (_req, res) => {
   try {
-    const [members, liveListings, requests, accepted, completed, disputed, recentUsers, recentListings, recentSwaps] = await Promise.all([
+    const windowEnd = new Date();
+    const windowStart = new Date(windowEnd.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const [members, liveListings, requests, accepted, completed, disputed, recentUsers, recentListings, recentSwaps, eligibleMemberIds, requestsCreated30d, requestsAccepted30d] = await Promise.all([
       User.countDocuments({ isDemo: false }), Listing.countDocuments({ isDemo: false, status: 'available' }), Swap.countDocuments({}),
       Swap.countDocuments({ status: 'accepted' }), Swap.countDocuments({ status: 'completed' }), Swap.countDocuments({ status: 'disputed' }),
       User.find({ isDemo: false }).select('name email city role suspended createdAt').sort({ createdAt: -1 }).limit(30),
       Listing.find({ isDemo: false }).select('-images').sort({ createdAt: -1 }).limit(30).populate('owner', 'name city isDemo demoLabel'),
-      Swap.find({}).sort({ updatedAt: -1 }).limit(30).populate('requester', 'name city').populate('recipient', 'name city').populate('offeredListing', 'title category size estimatedValue imageCount isDemo status').populate('requestedListing', 'title category size estimatedValue imageCount isDemo status')
+      Swap.find({}).sort({ updatedAt: -1 }).limit(30).populate('requester', 'name city').populate('recipient', 'name city').populate('offeredListing', 'title category size estimatedValue imageCount isDemo status').populate('requestedListing', 'title category size estimatedValue imageCount isDemo status'),
+      User.find({ isDemo: false, suspended: false, createdAt: { $lte: windowEnd } }).distinct('_id'),
+      Swap.countDocuments({ createdAt: { $gte: windowStart, $lte: windowEnd } }),
+      Swap.countDocuments({ createdAt: { $gte: windowStart, $lte: windowEnd }, 'statusHistory.to': 'accepted' })
     ]);
-    const adminSwapView = (s) => ({ id: String(s._id), status: s.status, note: s.note, handoffPreference: s.handoffPreference, adminNote: s.adminNote, createdAt: s.createdAt, requester: userView(s.requester), recipient: userView(s.recipient), offeredListing: s.offeredListing && listingView(s.offeredListing, s.requester), requestedListing: s.requestedListing && listingView(s.requestedListing, s.recipient) });
-    res.json({ kpis: { registeredMembers: members, availableMemberListings: liveListings, swapRequests: requests, acceptedSwaps: accepted, memberConfirmedCompletions: completed, disputesOpen: disputed }, users: recentUsers.map((u) => ({ ...userView(u), suspended: u.suspended })), listings: recentListings.map((i) => listingView(i)), swaps: recentSwaps.map(adminSwapView), note: 'Counts are database records; seed/demo accounts and listings are excluded. A completion is counted only after both members confirm.' });
+    const activityRows = eligibleMemberIds.length ? await ActivityEvent.aggregate([
+      { $match: { member: { $in: eligibleMemberIds }, createdAt: { $gte: windowStart, $lte: windowEnd } } },
+      { $group: { _id: '$member', actionCount: { $sum: 1 } } }
+    ]) : [];
+    const activeUsers30d = activityRows.length;
+    const engagedMembers30d = activityRows.filter((row) => row.actionCount >= 2).length;
+    const engagementRatePercent = eligibleMemberIds.length ? Math.round((engagedMembers30d / eligibleMemberIds.length) * 10000) / 100 : null;
+    const swapAcceptanceRatePercent = requestsCreated30d ? Math.round((requestsAccepted30d / requestsCreated30d) * 10000) / 100 : null;
+    const adminSwapView = (s) => ({ id: String(s._id), status: s.status, note: s.note, handoffPreference: s.handoffPreference, adminNote: s.adminNote, createdAt: s.createdAt, requester: userView(s.requester), recipient: userView(s.recipient), offeredListing: s.offeredListing && listingView(s.offeredListing, s.requester), requestedListing: s.requestedListing && listingView(s.requestedListing, s.recipient), statusHistory: (s.statusHistory || []).map((entry) => ({ from: entry.from, to: entry.to, actorId: String(entry.actor), at: entry.at })) });
+    res.json({ kpis: {
+      registeredMembers: members, availableMemberListings: liveListings, swapRequests: requests, acceptedSwaps: accepted, memberConfirmedCompletions: completed, disputesOpen: disputed,
+      activity30d: { startsAt: windowStart, endsAt: windowEnd, eligibleMemberCount: eligibleMemberIds.length, activeUsers: activeUsers30d, engagedMemberCount: engagedMembers30d, engagementRatePercent, requestsCreated: requestsCreated30d, requestsAccepted: requestsAccepted30d, requestAcceptanceRatePercent: swapAcceptanceRatePercent }
+    }, users: recentUsers.map((u) => ({ ...userView(u), suspended: u.suspended })), listings: recentListings.map((i) => listingView(i)), swaps: recentSwaps.map(adminSwapView), note: 'Counts use member and swap records; seed/demo accounts and listings are excluded. Activity analytics are first-party server events over the rolling 30 days; no third-party tracker or PII fields are stored. Completion is counted only after both members confirm.' });
   } catch (e) { sendError(res, e); }
 });
 app.patch('/api/admin/users/:id', requireUser, requireAdmin, requireCsrf, async (req, res) => {
@@ -392,7 +518,7 @@ app.patch('/api/admin/swaps/:id/resolve', requireUser, requireAdmin, requireCsrf
     if (!swap || swap.status !== 'disputed') throw new HttpError(409, 'Only an open dispute can be resolved here.');
     const reason = safeText(req.body.reason, 600, 'Resolution note');
     if (req.body.outcome !== 'close') throw new HttpError(400, 'A moderator can close a disputed request, not claim that an exchange occurred.');
-    swap.status = 'withdrawn'; swap.adminNote = reason; swap.updatedAt = new Date();
+    transitionSwap(swap, 'withdrawn', req.user._id); swap.adminNote = reason;
     await swap.save();
     await Listing.updateMany({ _id: { $in: [swap.offeredListing, swap.requestedListing] }, status: 'reserved' }, { $set: { status: 'available', updatedAt: new Date() } });
     res.json({ swapId: String(swap._id), status: swap.status });

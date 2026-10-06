@@ -9,9 +9,11 @@ A responsive clothing-exchange marketplace demo built with **HTML, CSS, browser 
 - Email/password registration and login; 12-character minimum; bcrypt hashing; server-side MongoDB sessions; session ID/CSRF rotation; HTTP-only, SameSite Strict cookies and Secure cookies in production.
 - CSRF token and same-origin checks on state-changing requests, authentication/upload rate limits, bounded input, fixed enums, parameterized Mongo queries, HTML-escaped client rendering, administrator role gates.
 - Listing create/edit/remove with JPEG/PNG/WebP only, MIME signature verification, up to four photos at 1.25 MB each. Member image bytes are stored in MongoDB, never in the application’s ephemeral local filesystem.
-- Direct swap request state changes, private persistent chat, optional local/remote/flexible hand-off preference (not a booking), administrative dispute queue, and separate member confirmation before any item is counted completed.
-- Search/category/city filters and deterministic matching from member-entered city plus a clearly explained estimate difference. No GPS or exact address.
-- Administrator counts are record-based. Demo entries are excluded and a completion requires confirmation from both members.
+- Direct swap request state changes with actor/time history, private persistent chat, numbered negotiated-terms revisions confirmed by both participants, and a separate two-member completion confirmation.
+- Same-city opportunities are ranked first; different-city alternatives are labeled. Matching uses member-entered city text and a clearly explained value gap, not GPS, radius, or geographic distance.
+- After mutual terms confirmation, the two participants may enter private manual hand-off/shipment notes (service label, reference, preference, and self-reported status). No public tracking page, courier API, booking, label/rate, payment, or carrier-verified delivery exists; provider integration remains Partial.
+- First-party rolling 30-day active/engaged-member and swap-request acceptance analytics use documented counts and denominators. Event documents store member ID/action/timestamp only, use no third-party tracker, and expire after 35 days.
+- Administrator counts are record-based and demo entries are excluded. Completion requires both members' in-app confirmations and is not proof of a physical exchange or delivery. Admin overview omits participant-only shipment fields.
 
 ## Run locally
 
@@ -28,7 +30,7 @@ Use **Node.js 20 or newer**. MongoDB is required for a normal application run; t
 
 ## Tests
 
-`npm test` launches an ephemeral MongoDB test server and drives the Express API with HTTP integration tests. The ephemeral database is **test-only** and is never used as a production persistence fallback. The tests cover registration/login/password hashing, CSRF and origin checks, listing create/edit/remove and photo validation/storage, city matching, private messaging, request withdraw/decline/accept, dual-confirmed completion, hand-off preference persistence, and administrator access/moderation.
+`npm test` launches an ephemeral MongoDB test server and drives the Express API with HTTP integration tests. The ephemeral database is **test-only** and is never used as a production persistence fallback. The tests cover registration/login/password hashing, CSRF and origin checks, listing create/edit/remove and photo validation/storage, same-/different-city matching, participant-only messaging and shipment-note authorization, terms revision and completion gates, actor/time transition history, controlled 30-day analytics calculations, and administrator moderation.
 
 The app package intentionally has no hard-coded demo logins or admin password. There is no user self-service admin bootstrap endpoint.
 
@@ -66,6 +68,7 @@ The source is maintained in the owner's existing private GitHub repository. Rend
 - `scripts/promote-admin.js` — secure owner-run admin provisioning.
 - `tests/marketplace.test.js` — integration tests.
 - `docs/PRD.md` — product requirements, scope, and acceptance criteria.
-- `docs/TEST-PLAN.md` — tested outcomes and post-deployment checklist.
+- `docs/REQUIREMENT-AUDIT.md` — current scorecard against both original briefs, including Partial provider and deployment items.
+- `docs/TEST-PLAN.md` and `docs/TEST-EVIDENCE.md` — covered behaviors, latest local results, remaining verification, and deployment checklist.
 - `DEPLOYMENT-HANDOFF.md` and `render.yaml` — the precise hosting blocker and free-tier Blueprint.
 - `.env.example` — variable names and non-secret placeholders.

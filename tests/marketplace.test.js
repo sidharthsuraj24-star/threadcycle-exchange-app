@@ -14,13 +14,20 @@ let csrfA;
 let csrfB;
 let userA;
 let userB;
+let userOtherCity;
+let userNia;
 let listingA;
 let listingB;
+let listingOtherCity;
+let mainSwapId;
+let otherCityAgent;
+let outsider;
+let testClientIp = 20;
 const jpg = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9k=', 'base64');
 async function csrf(agent) { return (await agent.get('/api/me').expect(200)).body.csrfToken; }
 async function createMember(agent, name, email, city) {
   const token = await csrf(agent);
-  const response = await agent.post('/api/register').set('x-csrf-token', token).send({ name, email, city, password: 'A-safe-test-password-2026!' }).expect(201);
+  const response = await agent.post('/api/register').set('x-csrf-token', token).set('x-forwarded-for', `198.51.100.${testClientIp++}`).send({ name, email, city, password: 'A-safe-test-password-2026!' }).expect(201);
   return { user: response.body.user, csrf: response.body.csrfToken };
 }
 async function addListing(agent, token, overrides = {}) {
@@ -41,9 +48,10 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
   process.env.MONGODB_URI = mongo.getUri('clothing_swap_test');
   process.env.SESSION_SECRET = 'test-session-secret-long-enough-to-meet-minimum-32-bytes';
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
-  const { User, Listing, Swap } = require('../server/models');
+  const { User, Listing, Swap, ActivityEvent } = require('../server/models');
   await Promise.all([User.createIndexes(), Listing.createIndexes(), Swap.createIndexes()]);
   app = require('../server/app').app;
+  app.set('trust proxy', 1);
   const { seedDemoListings } = require('../server/seed');
   await seedDemoListings();
   agentA = supertest.agent(app);
@@ -120,10 +128,29 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     await bad.expect(400);
   });
 
+  await t.test('analytics report an unavailable request-conversion rate when there are no requests', async () => {
+    await User.updateOne({ _id: userA.id }, { $set: { role: 'admin' } });
+    const overview = await agentA.get('/api/admin/overview').expect(200);
+    assert.equal(overview.body.kpis.activity30d.requestsCreated, 0);
+    assert.equal(overview.body.kpis.activity30d.requestsAccepted, 0);
+    assert.equal(overview.body.kpis.activity30d.requestAcceptanceRatePercent, null);
+    await User.updateOne({ _id: userA.id }, { $set: { role: 'member' } });
+  });
+
   await t.test('a real member can filter by coarse city, but demo samples are not match candidates', async () => {
+    const created = await createMember(agentB, 'Sam Member', 'sam@example.test', 'Pune'); csrfB = created.csrf; userB = created.user;
+    listingB = await addListing(agentB, csrfB, { title: 'Indigo cotton jacket', category: 'Outerwear', size: 'L', brandTier: 'Premium' });
+    otherCityAgent = supertest.agent(app);
+    const otherCityCreated = await createMember(otherCityAgent, 'Ravi Member', 'ravi@example.test', 'Mumbai'); userOtherCity = otherCityCreated.user;
+    listingOtherCity = await addListing(otherCityAgent, otherCityCreated.csrf, { title: 'Mumbai linen shirt', category: 'Tops', city: 'Mumbai' });
     const matches = await agentA.get('/api/matches?city=Pune').expect(200);
-    assert.equal(matches.body.items.length, 0);
-    assert.match(matches.body.locationMethod, /No GPS/);
+    const sameCity = matches.body.items.find((entry) => entry.item.id === listingB.id);
+    const differentCity = matches.body.items.find((entry) => entry.item.id === listingOtherCity.id);
+    assert.equal(sameCity.sameCity, true);
+    assert.equal(differentCity.sameCity, false);
+    assert.equal(matches.body.items[0].sameCity, true, 'actual same-city offers rank before other-city alternatives');
+    assert.match(matches.body.locationMethod, /city-level/);
+    assert.match(matches.body.locationMethod, /not geospatial/);
     const browse = await agentA.get('/api/listings?city=Pune');
     assert.equal(browse.status, 200, JSON.stringify(browse.body));
     assert.ok(browse.body.items.every((x) => x.city === 'Pune'));
@@ -132,32 +159,91 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
   });
 
   await t.test('a request starts a private thread; only its two participants can read and write', async () => {
-    const created = await createMember(agentB, 'Sam Member', 'sam@example.test', 'Mumbai'); csrfB = created.csrf; userB = created.user;
-    const outsider = supertest.agent(app);
-    await createMember(outsider, 'Nia Member', 'nia@example.test', 'Delhi');
-    listingB = await addListing(agentB, csrfB, { title: 'Indigo cotton jacket', category: 'Outerwear', size: 'L', brandTier: 'Premium' });
+    outsider = supertest.agent(app);
+    const nia = await createMember(outsider, 'Nia Member', 'nia@example.test', 'Delhi'); userNia = nia.user;
     await agentB.get('/api/admin/overview').expect(403);
     await agentA.post('/api/swaps').set('x-csrf-token', csrfA).send({ requestedListingId: listingB.id, offeredListingId: listingA.id, handoffPreference: 'courier-booked' }).expect(400);
     const token = csrfA;
     const response = await agentA.post('/api/swaps').set('x-csrf-token', token).send({ requestedListingId: listingB.id, offeredListingId: listingA.id, note: 'Would love to compare shoulder measurements.', handoffPreference: 'remote' }).expect(201);
     const swapId = response.body.swap.id;
-    assert.equal((await Swap.findById(swapId)).handoffPreference, 'remote');
+    mainSwapId = swapId;
+    const initial = await Swap.findById(swapId).lean();
+    assert.equal(initial.handoffPreference, 'remote');
+    assert.deepEqual(initial.statusHistory[0].from, 'none');
+    assert.equal(initial.statusHistory[0].to, 'requested');
+    assert.equal(String(initial.statusHistory[0].actor), userA.id);
+    assert.ok(initial.statusHistory[0].at instanceof Date);
+    assert.deepEqual(Object.keys(initial.statusHistory[0]).sort(), ['actor', 'at', 'from', 'to']);
     assert.equal((await agentA.get('/api/swaps').expect(200)).body.swaps.find((s) => s.id === swapId).handoffPreference, 'remote');
     const msgs = await agentA.get(`/api/swaps/${swapId}/messages`).expect(200);
     assert.equal(msgs.body.messages.length, 1);
     await agentA.post(`/api/swaps/${swapId}/messages`).set('x-csrf-token', csrfA).send({ body: 'Could you measure the sleeve?' }).expect(201);
-    assert.equal((await agentB.get(`/api/swaps/${swapId}/messages`).expect(200)).body.messages.length, 2);
+    await agentB.post(`/api/swaps/${swapId}/messages`).set('x-csrf-token', csrfB).send({ body: 'I can; the sleeve is 61 cm.' }).expect(201);
+    assert.equal((await agentB.get(`/api/swaps/${swapId}/messages`).expect(200)).body.messages.length, 3);
     await outsider.get(`/api/swaps/${swapId}/messages`).expect(404);
+    const outsiderCsrf = await csrf(outsider);
+    await outsider.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', outsiderCsrf).send({ action: 'propose', terms: 'Outsider cannot see these terms.' }).expect(404);
+    await outsider.patch(`/api/swaps/${swapId}/shipment`).set('x-csrf-token', outsiderCsrf).send({ status: 'in_transit' }).expect(404);
+    await agentA.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', csrfA).send({ action: 'propose', terms: 'Agreed item pair and mutually selected hand-off plan.' }).expect(409);
+    await agentA.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfA).send({ action: 'accept' }).expect(409);
     await agentB.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfB).send({ action: 'accept' }).expect(200);
     assert.equal((await Listing.findById(listingA.id)).status, 'reserved');
     assert.equal((await Listing.findById(listingB.id)).status, 'reserved');
+    await agentA.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfA).send({ action: 'confirm' }).expect(409);
+    await agentA.patch(`/api/swaps/${swapId}/shipment`).set('x-csrf-token', csrfA).send({ serviceLabel: 'Manual label', trackingReference: 'ref-private-1', status: 'in_transit', preference: 'remote' }).expect(409);
+    await agentA.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', csrfA).send({ action: 'propose', terms: 'Agreed item pair and mutually selected hand-off plan.' }).expect(200);
+    const proposal = (await agentA.get('/api/swaps').expect(200)).body.swaps.find((s) => s.id === swapId);
+    assert.equal(proposal.agreements.length, 1);
+    assert.equal(proposal.agreements[0].revision, 1);
+    assert.equal(proposal.agreements[0].proposedBy, userA.id);
+    assert.ok(Number.isFinite(new Date(proposal.agreements[0].proposedAt).getTime()));
+    assert.equal('email' in proposal.agreements[0], false);
+    const duplicateTerms = await agentB.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', csrfB).send({ action: 'propose', terms: 'Agreed item pair and mutually selected hand-off plan.' }).expect(200);
+    assert.equal(duplicateTerms.body.revisionCreated, false);
+    assert.equal(duplicateTerms.body.swap.agreements.length, 1);
+    await agentB.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', csrfB).send({ action: 'confirm' }).expect(200);
+    const oneTermConfirmation = (await agentA.get('/api/swaps').expect(200)).body.swaps.find((s) => s.id === swapId).agreements[0].confirmedBy;
+    assert.equal(oneTermConfirmation.length, 1);
+    assert.equal(oneTermConfirmation[0].memberId, userB.id);
+    assert.ok(Number.isFinite(new Date(oneTermConfirmation[0].at).getTime()));
+    await agentA.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfA).send({ action: 'confirm' }).expect(409);
+    await agentA.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', csrfA).send({ action: 'confirm' }).expect(200);
+    let agreed = (await agentA.get('/api/swaps').expect(200)).body.swaps.find((s) => s.id === swapId);
+    assert.equal(agreed.agreementConfirmed, true, JSON.stringify({ requester: agreed.requester.id, recipient: agreed.recipient.id, agreements: agreed.agreements }));
+    assert.equal(agreed.myAgreementConfirmed, true);
+    assert.deepEqual(agreed.agreements[0].confirmedBy.map((entry) => entry.memberId).sort(), [userA.id, userB.id].sort());
+    await agentA.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', csrfA).send({ action: 'propose', terms: 'Revised: agreed item pair, fit disclosures, and mutual hand-off plan.' }).expect(200);
+    agreed = (await agentA.get('/api/swaps').expect(200)).body.swaps.find((s) => s.id === swapId);
+    assert.equal(agreed.agreements.length, 2);
+    assert.equal(agreed.agreementConfirmed, false, 'changing terms invalidates both confirmations');
+    assert.equal(agreed.agreements[1].confirmedBy.length, 0);
+    await agentA.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfA).send({ action: 'confirm' }).expect(409);
+    await agentA.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', csrfA).send({ action: 'confirm' }).expect(200);
+    await agentB.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', csrfB).send({ action: 'confirm' }).expect(200);
+    const shipment = await agentA.patch(`/api/swaps/${swapId}/shipment`).set('x-csrf-token', csrfA).send({ serviceLabel: 'Manually entered example carrier', trackingReference: 'private-ref-123', status: 'in_transit', preference: 'remote' }).expect(200);
+    assert.equal(shipment.body.swap.shipment.status, 'in_transit');
+    assert.equal(shipment.body.swap.shipment.history.length, 1);
+    assert.equal(shipment.body.swap.shipment.history[0].actorId, userA.id);
+    assert.ok(Number.isFinite(new Date(shipment.body.swap.shipment.history[0].at).getTime()));
+    const participantView = (await agentB.get('/api/swaps').expect(200)).body.swaps.find((s) => s.id === swapId);
+    assert.equal(participantView.shipment.trackingReference, 'private-ref-123');
+    const publicListings = await agentA.get('/api/listings').expect(200);
+    assert.doesNotMatch(JSON.stringify(publicListings.body), /private-ref-123/);
     await agentA.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfA).send({ action: 'confirm' }).expect(200);
     const pending = await Swap.findById(swapId).lean();
     assert.equal(pending.status, 'accepted');
+    assert.equal(pending.completionConfirmations.length, 1);
+    assert.equal(String(pending.completionConfirmations[0].member), userA.id);
+    assert.ok(pending.completionConfirmations[0].at instanceof Date);
     await agentB.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfB).send({ action: 'confirm' }).expect(200);
     const done = await Swap.findById(swapId).lean();
     assert.equal(done.status, 'completed');
     assert.equal(done.confirmedBy.length, 2);
+    assert.equal(done.completionConfirmations.length, 2);
+    assert.deepEqual(done.completionConfirmations.map((event) => String(event.member)).sort(), [userA.id, userB.id].sort());
+    assert.deepEqual(done.statusHistory.map((event) => `${event.from}:${event.to}`), ['none:requested', 'requested:accepted', 'accepted:completed']);
+    assert.equal(String(done.statusHistory[1].actor), userB.id);
+    assert.equal(String(done.statusHistory[2].actor), userB.id);
     assert.equal((await Listing.findById(listingA.id)).status, 'swapped');
     assert.equal((await Listing.findById(listingB.id)).status, 'swapped');
     await agentA.get('/api/admin/overview').expect(403);
@@ -165,12 +251,41 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
 
   await t.test('only an already-registered member promoted from trusted server access gets admin controls', async () => {
     await User.updateOne({ _id: userA.id }, { $set: { role: 'admin' } });
+    await ActivityEvent.deleteMany({});
+    const recentAt = new Date(Date.now() - 1000);
+    const oldAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    await ActivityEvent.insertMany([
+      { member: userA.id, action: 'listing_created', createdAt: recentAt },
+      { member: userA.id, action: 'message_sent', createdAt: recentAt },
+      { member: userB.id, action: 'swap_requested', createdAt: recentAt },
+      { member: userOtherCity.id, action: 'listing_created', createdAt: recentAt },
+      { member: userOtherCity.id, action: 'message_sent', createdAt: recentAt },
+      { member: userNia.id, action: 'message_sent', createdAt: oldAt }
+    ]);
+    const storedEvent = await ActivityEvent.findOne({ member: userA.id }).lean();
+    assert.deepEqual(Object.keys(storedEvent).sort(), ['_id', 'action', 'createdAt', 'member']);
+    assert.equal('email' in storedEvent, false);
+    assert.ok(ActivityEvent.schema.indexes().some(([fields, options]) => fields.createdAt === 1 && options?.expireAfterSeconds === 35 * 24 * 60 * 60));
+    await Swap.create({ requester: userA.id, recipient: userB.id, offeredListing: listingA.id, requestedListing: listingB.id, status: 'requested', createdAt: recentAt, updatedAt: recentAt, statusHistory: [{ from: 'none', to: 'requested', actor: userA.id, at: recentAt }] });
+    await Swap.create({ requester: userA.id, recipient: userB.id, offeredListing: listingA.id, requestedListing: listingB.id, status: 'accepted', createdAt: oldAt, updatedAt: oldAt, statusHistory: [{ from: 'none', to: 'requested', actor: userA.id, at: oldAt }, { from: 'requested', to: 'accepted', actor: userB.id, at: oldAt }] });
     const overview = await agentA.get('/api/admin/overview');
     assert.equal(overview.status, 200, JSON.stringify(overview.body));
-    assert.equal(overview.body.kpis.registeredMembers, 3);
+    assert.equal(overview.body.kpis.registeredMembers, 4);
     assert.equal(overview.body.kpis.memberConfirmedCompletions, 1);
     assert.equal(overview.body.kpis.disputesOpen, 0);
     assert.match(overview.body.note, /seed\/demo accounts/);
+    const activity = overview.body.kpis.activity30d;
+    assert.equal(activity.eligibleMemberCount, 4);
+    assert.equal(activity.activeUsers, 3);
+    assert.equal(activity.engagedMemberCount, 2);
+    assert.equal(activity.engagementRatePercent, 50);
+    assert.equal(activity.requestsCreated, 2);
+    assert.equal(activity.requestsAccepted, 1);
+    assert.equal(activity.requestAcceptanceRatePercent, 50);
+    assert.ok(Date.now() - new Date(activity.startsAt).getTime() >= 30 * 24 * 60 * 60 * 1000 - 100);
+    assert.doesNotMatch(JSON.stringify(overview.body), /private-ref-123/);
+    const adminMainSwap = overview.body.swaps.find((s) => s.id === mainSwapId);
+    assert.equal('shipment' in adminMainSwap, false, 'admin overview does not receive participant-only shipment references');
     const moderated = await addListing(agentB, csrfB, { title: 'Member piece for moderation' });
     await agentA.patch(`/api/admin/listings/${moderated.id}`).set('x-csrf-token', csrfA).send({ hidden: true }).expect(200);
     assert.equal((await Listing.findById(moderated.id)).status, 'hidden');
@@ -190,18 +305,44 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     const requested = await addListing(agentB, csrfB, { title: 'Second request for review' });
     const toWithdraw = await agentA.post('/api/swaps').set('x-csrf-token', csrfA).send({ offeredListingId: offered.id, requestedListingId: requested.id }).expect(201);
     await agentA.patch(`/api/swaps/${toWithdraw.body.swap.id}/status`).set('x-csrf-token', csrfA).send({ action: 'withdraw' }).expect(200);
-    assert.equal((await Swap.findById(toWithdraw.body.swap.id)).status, 'withdrawn');
+    const withdrawnSwap = await Swap.findById(toWithdraw.body.swap.id).lean();
+    assert.equal(withdrawnSwap.status, 'withdrawn');
+    assert.equal(withdrawnSwap.statusHistory[1].to, 'withdrawn');
+    assert.equal(String(withdrawnSwap.statusHistory[1].actor), userA.id);
+    assert.ok(withdrawnSwap.statusHistory[1].at instanceof Date);
     const toDecline = await agentA.post('/api/swaps').set('x-csrf-token', csrfA).send({ offeredListingId: offered.id, requestedListingId: requested.id }).expect(201);
     await agentB.patch(`/api/swaps/${toDecline.body.swap.id}/status`).set('x-csrf-token', csrfB).send({ action: 'decline' }).expect(200);
-    assert.equal((await Swap.findById(toDecline.body.swap.id)).status, 'declined');
+    const declinedSwap = await Swap.findById(toDecline.body.swap.id).lean();
+    assert.equal(declinedSwap.status, 'declined');
+    assert.equal(declinedSwap.statusHistory[1].to, 'declined');
+    assert.equal(String(declinedSwap.statusHistory[1].actor), userB.id);
     const request = await agentA.post('/api/swaps').set('x-csrf-token', csrfA).send({ offeredListingId: offered.id, requestedListingId: requested.id, note: 'Please confirm fit.' }).expect(201);
     const disputeId = request.body.swap.id;
     await agentB.patch(`/api/swaps/${disputeId}/status`).set('x-csrf-token', csrfB).send({ action: 'dispute' }).expect(200);
+    const disputedSwap = await Swap.findById(disputeId).lean();
+    assert.equal(disputedSwap.statusHistory[1].to, 'disputed');
+    assert.equal(String(disputedSwap.statusHistory[1].actor), userB.id);
     assert.equal((await agentA.get('/api/admin/overview').expect(200)).body.kpis.disputesOpen, 1);
     await agentA.patch(`/api/admin/swaps/${disputeId}/resolve`).set('x-csrf-token', csrfA).send({ outcome: 'complete', reason: 'An admin cannot attest that an exchange happened.' }).expect(400);
     const closed = await agentA.patch(`/api/admin/swaps/${disputeId}/resolve`).set('x-csrf-token', csrfA).send({ outcome: 'close', reason: 'Request closed after review.' }).expect(200);
     assert.equal(closed.body.status, 'withdrawn');
-    assert.equal((await Swap.findById(disputeId)).adminNote, 'Request closed after review.');
+    const closedSwap = await Swap.findById(disputeId).lean();
+    assert.equal(closedSwap.adminNote, 'Request closed after review.');
+    assert.equal(closedSwap.statusHistory[2].from, 'disputed');
+    assert.equal(closedSwap.statusHistory[2].to, 'withdrawn');
+    assert.equal(String(closedSwap.statusHistory[2].actor), userA.id);
+
+    const competingOffer = await addListing(agentA, csrfA, { title: 'First competing offer' });
+    const competingOfferOther = listingOtherCity;
+    const sharedRequest = await addListing(agentB, csrfB, { title: 'Shared request target' });
+    const firstCompetingRequest = await agentA.post('/api/swaps').set('x-csrf-token', csrfA).send({ offeredListingId: competingOffer.id, requestedListingId: sharedRequest.id }).expect(201);
+    const otherCityCsrf = await csrf(otherCityAgent);
+    const secondCompetingRequest = await otherCityAgent.post('/api/swaps').set('x-csrf-token', otherCityCsrf).send({ offeredListingId: competingOfferOther.id, requestedListingId: sharedRequest.id }).expect(201);
+    await agentB.patch(`/api/swaps/${firstCompetingRequest.body.swap.id}/status`).set('x-csrf-token', csrfB).send({ action: 'accept' }).expect(200);
+    const autoDeclined = await Swap.findById(secondCompetingRequest.body.swap.id).lean();
+    assert.equal(autoDeclined.status, 'declined');
+    assert.equal(autoDeclined.statusHistory[1].to, 'declined');
+    assert.equal(String(autoDeclined.statusHistory[1].actor), userB.id);
   });
 
   await t.test('public health check does not expose database credentials', async () => {

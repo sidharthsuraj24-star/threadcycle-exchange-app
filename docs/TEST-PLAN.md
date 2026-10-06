@@ -2,51 +2,50 @@
 
 ## Automated coverage
 
-`npm test` runs the Express API against a disposable MongoDB instance from `mongodb-memory-server`, using Supertest agents and real session cookies. The current suite covers:
+`npm test` runs the Express API against disposable MongoDB from `mongodb-memory-server`, using Supertest agents and persisted test sessions. The suite covers:
 
-- Eight clearly labeled illustrative seed listings/profiles, no demo password hashes, and non-interactive demo offers.
-- Registration/login, password-length validation, bcrypt hashing, session rotation, public profile limits, duplicate email rejection, and failed login.
-- CSRF and same-origin rejection, profile update persistence, and safe handling of markup in profile data.
-- Listing create/edit/remove, photo MIME/signature checks, image bytes persisted in MongoDB, server-computed estimates despite a forged client estimate, and SVG rejection.
-- Coarse city filtering/matching and proof that demo offers cannot be requested or returned as real match candidates.
-- Swap creation, remote preference persistence (not courier integration), participant-only messaging, recipient accept, both listings reserved on acceptance, member confirmation, and completion only after the second confirmation.
-- Request withdrawal, recipient decline, dispute reporting, admin authorization, member suspend/restore, listing hide/restore, dispute closure without an admin attesting to a real exchange, and record-based KPI output.
-- Safe HTML output when a member-controlled name is rendered in the dashboard greeting; the test executes the frontend's actual dashboard template.
-- The static HTML/CSP and the credential-free health endpoint.
+- Eight labeled illustrative seed listings/profiles, no demo password hashes, safe HTML/CSP, and a credential-free health endpoint.
+- Registration/login, password validation/hashing, session rotation, duplicate/failed login, CSRF/same-origin rejection, profile update, and member-name escaping.
+- Listing create/edit/remove, computed values rather than forged client values, JPEG/PNG/WebP signature validation, MongoDB image bytes, and SVG rejection.
+- A real same-city listing and a real different-city alternative, same-city-first ordering, explicit city-level/non-geospatial disclosure, broad city filtering, and exclusion of demo items from matches/requests.
+- Swap creation, initial actor/time history, participant-only private messages, outsider 404s, recipient-only acceptance, item reservation, and rejection of completion before bilateral terms agreement.
+- Separate terms agreement after chat: proposal/revision persistence, both member confirmations, revision-reset behavior, server-side authorization and state checks, and final two-member completion confirmations as a separate actor/timestamped action.
+- Provider-neutral manual shipment fields and self-reported status; shipment eligibility only after both members confirm terms; member-only access; status actor/time; admin exclusion of tracking reference. No courier endpoint or external provider is exercised because none is integrated.
+- Actor-and-time history for request, acceptance, completion, withdrawal, decline, dispute, admin closure, and automatic decline of competing requests.
+- Controlled rolling-window analytics fixtures: active and engaged distinct-member counts, engagement-rate numerator/denominator, request-acceptance numerator/denominator, zero-denominator behavior in the implementation, and exclusion of a 31-day-old request/event from a 30-day measure.
+- Admin role enforcement, suspend/restore, hide/restore, dispute closure without admin attestation, and demo-data exclusion.
 
 ## Latest local verification
 
-Verified on **2026-10-06** in the project workspace:
+Verified in `/workspace/clothing-swap-marketplace` on **2026-10-06** after the latest source and test changes:
 
 - `npm run check` — **passed**; Node.js syntax checks passed for `server/app.js`, `server/models.js`, `public/app.js`, and `server/index.js`.
-- `npm test` — **passed: 10 tests, 10 passed, 0 failed, 0 skipped**; the final recorded run took **5.091 seconds**. The suite used an ephemeral MongoDB test instance and stopped it after the run.
-- `git diff --check` — **passed** for the reviewed changes.
+- `npm test` — **passed: 11 tests, 11 passed, 0 failed, 0 skipped**; final run completed in **5.412 seconds**. The integration suite used and stopped an ephemeral MongoDB instance.
+- `git diff --check` — **passed**; no whitespace errors were reported.
 
-The integration database is test-only. Passing these checks does not establish a durable production database or a deployed service. See [`TEST-EVIDENCE.md`](TEST-EVIDENCE.md) for the captured command output.
+Exact command output is recorded in [`TEST-EVIDENCE.md`](TEST-EVIDENCE.md). These checks validate source behavior only; they do not establish a production database, deployed service, actual courier behavior, physical exchange, or environmental impact.
 
-## Known gaps not covered by these tests
+## Remaining verification and acceptance gaps
 
-- No courier provider/API, booking, waybill, shipment status, or delivery tracking exists; tests only prove that `remote` is stored as a preference and reject an unsupported `courier-booked` enum.
-- There is no distinct two-member confirmation record for negotiated terms after chat; acceptance accepts the proposed pair, while the two-member confirmation is a completion assertion.
-- The admin screens show only the newest 30 users, listings, and swaps; the tests do not exercise pagination because none is implemented.
-- Active-user, engagement, and request-conversion analytics are not implemented. There is no activity-event instrumentation or defined active-user window.
-- There is no load/performance benchmark, automated browser/mobile viewport suite, live-provider integration test, production-database test, or deployment test.
-- A member-confirmed completion is only an in-app assertion; it does not verify physical delivery or exchange.
+- Real courier integration (provider selection, authorized API, booking/rates/labels and carrier status) is **Partial**. The implemented carrier label, reference, preference, and status are manual participant notes only.
+- Matching intentionally uses city-name equality and value gap, not geographic coordinates or distance; the original “nearby” requirement is therefore **Partial**.
+- Earlier persisted swap records may have missing transition history. Their original actor and transition timestamp cannot be safely reconstructed; no values are invented.
+- Admin lists are limited to the newest 30 entries without search/pagination; performance, load, restore/backup, durable production DB, and production security review remain untested.
+- Manual browser/viewport testing, real email/auth providers, live courier provider tests, production MongoDB tests, and public deployment/health checks were not run. Completion remains member-reported, not verified delivery or physical exchange.
 
-## Manual verification after an authorized deployment
+## Manual verification after separately authorized deployment
 
-These checks are **not run** in this audit because deployment and release were explicitly prohibited:
+These checks were **not run**; deployment/release was explicitly prohibited for this audit:
 
-1. Open the assigned HTTPS hostname at desktop and narrow/mobile widths; check the seven connected screen groups, menu, demo labels, and disabled sample-offer actions.
-2. Register two authorized test members; verify sessions survive refresh and profile city/name updates persist.
-3. Create and edit listings with JPEG/PNG/WebP photos; verify invalid, oversized, and excess images are rejected and valid images survive an app restart.
-4. Check text/category/size/city filters, listing details, and member-only city/value suggestions.
-5. Send, withdraw, accept, and decline requests; verify accepted items become reserved and disputed closure restores reserved items.
-6. Verify both participants can negotiate and a third account cannot read or write the thread; confirm the completion counter changes only after both member confirmations.
-7. Promote an authorized existing account through the trusted CLI process; verify admin-only member/listing/swap/dispute screens and controls.
-8. Verify `/api/health` reports a connected persistent MongoDB through the public hostname, and inspect production HTTPS/session cookie flags.
-9. Do not claim courier booking or tracking during deployment verification; no courier integration is present in this source.
+1. Open the authorized HTTPS hostname at desktop and narrow/mobile widths; review the seven connected screen groups, navigation, illustrative-data labels, and hidden demo request actions.
+2. With two authorized member accounts, create listings, start a request, exchange messages, propose terms, verify each member confirms the same revision, and confirm that changing terms resets both confirmations.
+3. Verify an outsider cannot read or write the conversation, terms, status history, or manually entered shipment notes; verify admin screens omit shipment references.
+4. Verify the completion button is unavailable to the API until both members confirm current terms, and that each later completion confirmation remains a separate action.
+5. Verify same-city offers appear before different-city alternatives, and that the UI never describes city-level matching as measured distance.
+6. Review 30-day analytics in the admin panel against controlled records and the documented exact denominators; check that activity events expire under the configured TTL index.
+7. Verify `/api/health` reports a connected persistent MongoDB and inspect production session-cookie/proxy settings.
+8. Do not claim courier booking, provider tracking, physical exchange, or delivery verification unless those capabilities are separately authorized, implemented, and tested.
 
 ## Deployment status
 
-No deployment was performed or verified. No live URL is claimed. The project requires a configured persistent MongoDB URI and protected session secret, and a host/account authorization step; source configuration alone is not deployment evidence.
+No deployment was performed or verified. There is no verified live URL. The source requires a configured persistent MongoDB URI and protected session secret, and the original briefs require a live deployed link. Real provider-based courier integration also remains Partial. No release should be represented as passing all original criteria until the authorized provider/deployment gaps are resolved and verified.

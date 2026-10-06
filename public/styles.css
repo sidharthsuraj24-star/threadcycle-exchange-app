@@ -29,3 +29,15 @@ footer{background:#eae9e1;border-top:1px solid #ddded5;margin-top:48px}.footer-i
 .category-chip.active span{color:#dbe8dc}
 :where(a,button,input,select,textarea,summary):focus-visible{outline:3px solid #b77a52;outline-offset:3px}
 @media(max-width:720px){.category-browse{margin:18px 0 14px;padding:16px 14px 13px;border-radius:15px}.category-browse-head h2{font-size:23px}.category-chips{gap:7px;margin-inline:-2px}.category-chip{min-height:37px;padding:7px 11px;font-size:11px}}
+
+.thread-layout>.panel{margin-top:14px}
+.agreement-panel .form-card,.shipment-panel .form-card{margin-top:14px;box-shadow:none}
+.agreement-version{padding:12px 14px;margin:9px 0;border:1px solid var(--line);border-radius:12px;background:#f8f8f3}
+.agreement-version p{margin:7px 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
+.agreement-version small{font-size:10px;color:var(--muted)}
+.history-list{margin:10px 0;padding-left:20px}
+.history-list li{padding:3px 0 7px 2px;font-size:11px}
+.history-list li span{display:block}
+.history-list li small{color:var(--muted);font-size:10px}
+.agreement-panel>button{margin:12px 8px 0 0}
+@media(max-width:720px){.agreement-panel .form-card,.shipment-panel .form-card{padding:15px}.history-list{padding-left:17px}}

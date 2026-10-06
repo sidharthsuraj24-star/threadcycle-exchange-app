@@ -13,7 +13,7 @@ if (Buffer.byteLength(process.env.SESSION_SECRET) < 32) {
 }
 const { app } = require('./app');
 const { seedDemoListings } = require('./seed');
-const { User, Listing, Swap, Message } = require('./models');
+const { User, Listing, Swap, Message, ActivityEvent } = require('./models');
 
 async function start() {
   await mongoose.connect(process.env.MONGODB_URI, {
@@ -21,7 +21,7 @@ async function start() {
     maxPoolSize: 10,
     autoIndex: false
   });
-  await Promise.all([User.createIndexes(), Listing.createIndexes(), Swap.createIndexes(), Message.createIndexes()]);
+  await Promise.all([User.createIndexes(), Listing.createIndexes(), Swap.createIndexes(), Message.createIndexes(), ActivityEvent.createIndexes()]);
   if (process.env.SEED_DEMOS === 'true') await seedDemoListings();
   const port = Number(process.env.PORT || 3000);
   const server = app.listen(port, '0.0.0.0', () => console.log(`Clothing swap app listening on port ${port}`));
