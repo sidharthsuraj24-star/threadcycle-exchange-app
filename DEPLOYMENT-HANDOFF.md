@@ -19,7 +19,7 @@ The Function request passes through the existing Express API router and security
 
 ## Exact Vercel setup after the release gate
 
-Do not perform these steps until the provider-choice gate is resolved and the owner has instructed that deployment may proceed.
+Do not perform these steps while the courier-provider choice is unresolved. The existing Vercel authorization is limited to the noncommercial student demo; persistent database setup is also a prerequisite.
 
 1. In Vercel, import **only** `sidharthsuraj24-star/threadcycle-exchange-app` from the owner's existing private GitHub account. Keep the repository private and choose the `vercel-preparation` branch for this source. Do not create a new or public repository.
 2. Keep the project Root Directory as `.`. Allow Vercel to detect Express from the root `index.js` using the documented [Express behavior](https://vercel.com/docs/frameworks/backend/express); use the documented [`vercel.json` configuration](https://vercel.com/docs/project-configuration/vercel-json) without defining a custom rewrite or a persistent server process. If the setup form requests build settings, use:
@@ -35,9 +35,9 @@ Do not perform these steps until the provider-choice gate is resolved and the ow
    - `TRUST_PROXY` — `1`, for Vercel's single trusted proxy hop.
    - `SEED_DEMOS` — `true` if the eight labeled illustrative listings should be present.
    - `NODE_ENV` is supplied by Vercel for the deployment; do not set it to development in production.
-4. When deployment is separately cleared, let Vercel build the selected private branch. Do not upgrade or enable paid resources; stop if the dashboard requires a paid plan, payment, or billing action. This host authorization is only for the noncommercial student demo.
-5. After Vercel assigns the URL and the deployment is authorized, confirm the static page and assets load; then check `/api/health` returns `{"ok":true,"database":"connected"}`. Verify account registration/login, secure cookie attributes, CSRF and same-origin rejection, a listing upload within the four-photo/1-MB-per-file limit, private chat, and administrator access with owner-authorized accounts. Do not represent a health response alone as proof of all product acceptance criteria.
-6. Set `APP_ORIGIN` to the exact assigned HTTPS origin in the applicable Vercel environment and redeploy if necessary; repeat the origin/CSRF checks. Provide a URL only after a reachable health check and owner-approved release.
+4. After the courier choice is resolved and the persistent database prerequisites are configured, let Vercel build the selected private branch within the existing noncommercial-demo authorization. Do not upgrade or enable paid resources; stop if the dashboard requires a paid plan, payment, or billing action.
+5. After Vercel assigns the URL, confirm the static page and assets load; then check `/api/health` returns `{"ok":true,"database":"connected"}`. Verify account registration/login, secure cookie attributes, CSRF and same-origin rejection, a listing upload within the four-photo/1-MB-per-file limit, private chat, and administrator access with owner-authorized accounts. Do not represent a health response alone as proof of all product acceptance criteria.
+6. Set `APP_ORIGIN` to the exact assigned HTTPS origin in the applicable Vercel environment and redeploy if necessary; repeat the origin/CSRF checks. Provide a URL only after a reachable health check and all required verification.
 
 ## Current verification and boundaries
 

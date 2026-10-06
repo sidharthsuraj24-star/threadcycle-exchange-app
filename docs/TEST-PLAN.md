@@ -28,9 +28,9 @@ Exact local output and scope are recorded in [`TEST-EVIDENCE.md`](TEST-EVIDENCE.
 - Admin lists are limited to the newest 30 entries without search/pagination; performance, load, production database backup/restore and production security review remain untested.
 - Manual browser/viewport testing, real email/auth providers, live courier-provider tests, production MongoDB tests, and public deployment/health checks were not run. Completion remains member-reported, not verified delivery or physical exchange.
 
-## Manual verification after separately authorized deployment
+## Manual verification after the courier-choice gate
 
-These checks were **not run**. Perform only after the owner has chosen the courier provider and separately instructed that a Vercel project/deployment may be created. Keep the project private and the host use limited to the authorized noncommercial student demo.
+These checks were **not run**. Perform after the owner chooses the courier provider, within the existing authorization for a noncommercial student demo. Keep the project private and do not enable paid resources.
 
 1. Open the authorized HTTPS hostname at desktop and narrow/mobile widths; review the seven connected screen groups, navigation, illustrative-data labels, and hidden demo request actions.
 2. With two authorized member accounts, create listings, start a request, exchange messages, propose terms, verify each member confirms the same revision, and confirm that changing terms resets both confirmations.
@@ -43,4 +43,4 @@ These checks were **not run**. Perform only after the owner has chosen the couri
 
 ## Deployment status
 
-No Vercel project or deployment was created or verified; there is no live URL. This is source preparation only. A protected persistent MongoDB URI and session secret are prerequisites for future hosting, but none was requested or entered. Deployment and live acceptance remain blocked on the owner's courier-provider choice and a subsequent explicit go-ahead.
+No Vercel project or deployment was created or verified; there is no live URL. This is source preparation only. A protected persistent MongoDB URI and session secret are prerequisites for future hosting, but none was requested or entered. Deployment and live acceptance remain blocked on the owner's courier-provider choice and the required persistent database configuration.
