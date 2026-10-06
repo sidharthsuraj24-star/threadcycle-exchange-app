@@ -31,6 +31,7 @@ const listingSchema = new Schema({
   description: { type: String, required: true, trim: true, maxlength: 800 },
   city: { type: String, required: true, trim: true, maxlength: 60 },
   estimatedValue: { type: Number, required: true, min: 0, max: 50000 },
+  comparableRetailPrice: { type: Number, min: 1, max: 10000000 },
   status: { type: String, enum: ['available', 'reserved', 'swapped', 'removed', 'hidden'], default: 'available', index: true },
   images: { type: [imageSchema], default: [], select: false },
   imageCount: { type: Number, default: 0 },

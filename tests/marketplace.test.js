@@ -108,9 +108,10 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
   });
 
   await t.test('listing creation validates photo type, estimates value server-side, and stores image bytes in MongoDB', async () => {
-    listingA = await addListing(agentA, csrfA, { estimatedValue: '49999' });
+    listingA = await addListing(agentA, csrfA, { estimatedValue: '49999', comparableRetailPrice: '4200' });
     assert.equal(listingA.imageCount, 1);
-    assert.equal(listingA.estimatedValue, 1300);
+    assert.equal(listingA.estimatedValue, 1300, 'comparable retail price does not replace or affect the server estimate');
+    assert.equal(listingA.comparableRetailPrice, 4200);
     const photo = await agentA.get(listingA.imageUrls[0]).expect(200);
     assert.equal(photo.headers['content-type'], 'image/jpeg');
     const doc = await Listing.findById(listingA.id).select('+images');
@@ -118,10 +119,13 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     const edited = agentA.patch(`/api/listings/${listingA.id}`).set('x-csrf-token', csrfA)
       .field('title', 'Updated cotton overshirt').field('category', 'Outerwear').field('size', 'M').field('brand', 'Field Notes')
       .field('brandTier', 'Premium').field('condition', 'Excellent').field('description', 'Updated listing text.')
+      .field('comparableRetailPrice', '5100')
       .attach('images', jpg, { filename: 'updated.jpg', contentType: 'image/jpeg' });
     listingA = (await edited.expect(200)).body.item;
     assert.equal(listingA.title, 'Updated cotton overshirt');
     assert.equal(listingA.estimatedValue, 1600);
+    assert.equal(listingA.comparableRetailPrice, 5100);
+    assert.equal((await Listing.findById(listingA.id)).comparableRetailPrice, 5100);
     const removable = await addListing(agentA, csrfA, { title: 'Temporary item to remove' });
     await agentA.delete(`/api/listings/${removable.id}`).set('x-csrf-token', csrfA).send({}).expect(200);
     await agentA.get(`/api/listings/${removable.id}`).expect(404);
@@ -130,6 +134,11 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
       .field('title', 'Bad photo').field('category', 'Tops').field('size', 'M').field('brand', 'X').field('brandTier', 'Everyday').field('condition', 'Good').field('description', 'No SVG uploads')
       .attach('images', Buffer.from('<svg onload="alert(1)"></svg>'), { filename: 'bad.svg', contentType: 'image/svg+xml' });
     await bad.expect(400);
+    const badPrice = agentA.post('/api/listings').set('x-csrf-token', csrfA)
+      .field('title', 'Invalid comparable price').field('category', 'Tops').field('size', 'M').field('brand', 'X').field('brandTier', 'Everyday').field('condition', 'Good').field('description', 'Reject an out-of-range reference').field('comparableRetailPrice', '10000001')
+      .attach('images', jpg, { filename: 'bad-price.jpg', contentType: 'image/jpeg' });
+    const rejectedPrice = await badPrice.expect(400);
+    assert.match(rejectedPrice.body.error, /Comparable retail price/);
     const tooLargeBytes = Buffer.alloc(1_000_001);
     Buffer.from([0xff, 0xd8, 0xff]).copy(tooLargeBytes);
     const tooLarge = agentA.post('/api/listings').set('x-csrf-token', csrfA)
@@ -150,10 +159,13 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
 
   await t.test('a real member can filter by coarse city, but demo samples are not match candidates', async () => {
     const created = await createMember(agentB, 'Sam Member', 'sam@example.test', 'Pune'); csrfB = created.csrf; userB = created.user;
-    listingB = await addListing(agentB, csrfB, { title: 'Indigo cotton jacket', category: 'Outerwear', size: 'L', brandTier: 'Premium' });
+    listingB = await addListing(agentB, csrfB, { title: 'Indigo cotton jacket', category: 'Outerwear', size: 'L', brandTier: 'Premium', comparableRetailPrice: '9000000' });
+    assert.equal(listingB.estimatedValue, 1600);
+    assert.equal(listingB.comparableRetailPrice, 9000000);
     otherCityAgent = supertest.agent(app);
     const otherCityCreated = await createMember(otherCityAgent, 'Ravi Member', 'ravi@example.test', 'Mumbai'); userOtherCity = otherCityCreated.user;
     listingOtherCity = await addListing(otherCityAgent, otherCityCreated.csrf, { title: 'Mumbai linen shirt', category: 'Tops', city: 'Mumbai' });
+    assert.equal(listingOtherCity.comparableRetailPrice, null, 'the comparison price is optional');
     const matches = await agentA.get('/api/matches?city=Pune').expect(200);
     const sameCity = matches.body.items.find((entry) => entry.item.id === listingB.id);
     const differentCity = matches.body.items.find((entry) => entry.item.id === listingOtherCity.id);
@@ -408,6 +420,31 @@ test('dashboard escapes a member-controlled name before rendering HTML', async (
   assert.doesNotMatch(appRoot.innerHTML, /Hello, <img/);
 });
 
+test('listing detail presents the optional comparable price separately and marks it unverified', async () => {
+  const appRoot = { innerHTML: '' };
+  const context = {
+    document: { getElementById: () => appRoot },
+    URL,
+    URLSearchParams,
+    location: { href: 'https://market.test/listings/listing-1', origin: 'https://market.test' }
+  };
+  vm.createContext(context);
+  const frontend = fs.readFileSync(require.resolve('../public/app.js'), 'utf8');
+  const bootstrapOffset = frontend.indexOf("appRoot.addEventListener('submit', submitHandler);");
+  assert.ok(bootstrapOffset > 0, 'frontend bootstrap boundary exists');
+  vm.runInContext(frontend.slice(0, bootstrapOffset), context, { filename: 'public/app.js' });
+  context.listing = { id: 'listing-1', title: 'Cotton overshirt', category: 'Outerwear', size: 'M', brand: 'Field Notes', condition: 'Excellent', description: 'A well-cared-for layer.', city: 'Pune', estimatedValue: 1300, comparableRetailPrice: 4200, status: 'available', isDemo: false, imageUrls: [], ownerId: 'member-1', ownerName: 'Ada Member', ownerCity: 'Pune', ownerIsDemo: false };
+  vm.runInContext('api = async () => ({ item: listing })', context);
+  const formMarkup = vm.runInContext('listingForm(listing)', context);
+  assert.match(formMarkup, /Comparable retail price \(user-entered, unverified\)/);
+  assert.match(formMarkup, /name="comparableRetailPrice"/);
+  assert.match(formMarkup, /No retailer prices are imported/);
+  await vm.runInContext('renderDetail("listing-1")', context);
+  assert.match(appRoot.innerHTML, /Comparable retail price \(user-entered, unverified\)/);
+  assert.match(appRoot.innerHTML, /₹4,200/);
+  assert.match(appRoot.innerHTML, /not verified and not used to calculate the swap estimate or matches/);
+  assert.match(appRoot.innerHTML, /Indicative swap-value estimate—not cash, a sale price, or a guarantee/);
+});
 test.after(async () => {
   if (app?.locals?.sessionStore?.close) { try { await app.locals.sessionStore.close(); } catch {} }
   if (mongoose.connection.readyState) await mongoose.disconnect();

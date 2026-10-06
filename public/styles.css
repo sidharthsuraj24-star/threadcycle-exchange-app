@@ -41,3 +41,8 @@ footer{background:#eae9e1;border-top:1px solid #ddded5;margin-top:48px}.footer-i
 .history-list li small{color:var(--muted);font-size:10px}
 .agreement-panel>button{margin:12px 8px 0 0}
 @media(max-width:720px){.agreement-panel .form-card,.shipment-panel .form-card{padding:15px}.history-list{padding-left:17px}}
+
+.detail-comparable{border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin:12px 0;background:var(--white)}
+.detail-comparable b{display:block;font-size:12px}
+.detail-comparable strong{display:block;color:var(--moss-dark);font-size:19px;font-family:var(--serif);font-weight:500}
+.detail-comparable small{display:block;font-size:10px;color:var(--muted);margin-top:3px}

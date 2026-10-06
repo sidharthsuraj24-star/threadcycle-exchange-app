@@ -71,7 +71,7 @@ const listingView = (item, owner) => ({
   id: String(item._id), ownerId: String(item.owner?._id || item.owner), ownerName: owner?.name || item.owner?.name || 'Member', ownerCity: owner?.city || item.owner?.city || item.city,
   ownerIsDemo: Boolean(owner?.isDemo ?? item.owner?.isDemo ?? item.isDemo), demoLabel: (owner?.demoLabel || item.owner?.demoLabel || (item.isDemo ? 'Illustrative demo · not contactable' : '')),
   title: item.title, category: item.category, size: item.size, brand: item.brand, brandTier: item.brandTier, condition: item.condition, description: item.description, city: item.city,
-  estimatedValue: item.estimatedValue, status: item.status, isDemo: Boolean(item.isDemo), imageCount: item.imageCount || 0,
+  estimatedValue: item.estimatedValue, comparableRetailPrice: item.comparableRetailPrice ?? null, status: item.status, isDemo: Boolean(item.isDemo), imageCount: item.imageCount || 0,
   imageUrls: item.isDemo ? [`/images/demo-${item.demoImageNo}.webp`] : Array.from({ length: item.imageCount || 0 }, (_, index) => `/api/listings/${item._id}/images/${index}`),
   createdAt: item.createdAt
 });
@@ -151,11 +151,19 @@ const upload = multer({ storage, limits: { fileSize: 1_000_000, files: 4, fields
   cb(null, true);
 } });
 const imageFiles = (req) => (req.files || []).map(validateImageBytes);
+const optionalComparableRetailPrice = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' && typeof value !== 'number') throw new HttpError(400, 'Enter a valid comparable retail price.');
+  const amount = Number(value);
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > 10000000) throw new HttpError(400, 'Comparable retail price must be a whole number of rupees from ₹1 to ₹10,000,000.');
+  return amount;
+};
 const listingFilterFromBody = (body, city) => ({
   title: safeText(body.title, 90, 'Title'), category: enumValue(body.category, Object.keys(CATEGORIES), 'category'),
   size: safeText(body.size, 24, 'Size'), brand: safeText(body.brand, 60, 'Brand'), brandTier: enumValue(body.brandTier, Object.keys(BRANDS), 'brand tier'),
   condition: enumValue(body.condition, Object.keys(CONDITIONS), 'condition'),
   description: safeText(body.description, 800, 'Description'), city: safeText(city || body.city, 60, 'City'),
+  comparableRetailPrice: optionalComparableRetailPrice(body.comparableRetailPrice),
   estimatedValue: estimateValue({ category: body.category, condition: body.condition, brandTier: body.brandTier })
 });
 
