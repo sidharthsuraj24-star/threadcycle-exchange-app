@@ -34,3 +34,11 @@ Verified locally on 2026-10-06:
 - `npm test` — passed, **9 tests; 9 passed; 0 failed**, about 5 seconds. The suite exercised the API with MongoDB 7.0.24 running in a disposable in-memory test instance and then shut it down.
 - No production Atlas connection was configured or used. The ephemeral test database is test-only and is not evidence of persisted production deployment.
 - No app URL was deployed or verified. Visual/manual browser acceptance and all post-deployment checks above remain outstanding.
+
+## UI refinement verification (2026-10-06)
+
+- `npm run check` passed after the UI changes. `npm test` passed unchanged: **9 tests; 9 passed; 0 failed** against an ephemeral MongoDB 7.0.24 instance.
+- Browser smoke checks verified public discovery, category-chip filtering, preservation of active search/city filters when choosing a category, and an illustrative item detail page whose sample offer cannot receive swap requests.
+- Updated screenshots are included in `review-screenshots/`: desktop home at 1440 × 1100 and mobile home at 390 × 844. These show the existing sample content with its illustrative labels; they are not evidence of real users or exchanges.
+- The preview used only the existing labeled demo listings and a disposable database; no test members, real swaps, or production data were added. Automated password entry was blocked by the browser's protected-field control, so no browser registration was submitted. Registration and the authenticated listing, request, chat, matching, and admin flows remain covered by the original integration suite.
+- No public deployment was started. Atlas connection details and Render authorization remain outstanding, so the app has no verified public URL.

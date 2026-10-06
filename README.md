@@ -43,7 +43,7 @@ The app package intentionally has no hard-coded demo logins or admin password. T
 
 The source is prepared for a free Render web service connected to a persistent MongoDB Atlas database. Use a Render **Free Web Service** and an Atlas **M0 Free cluster** only; do not enable a paid instance, paid add-on, or billing upgrade.
 
-1. Put this project in a Git repository under the account you authorize for deployment. Do not include `.env`, database credentials, passwords, or admin keys. `public/images/demo-*.webp` are bundled static illustrations; member photos and marketplace data are in MongoDB. A free-service `render.yaml` Blueprint is included.
+1. Use the existing private repository `sidharthsuraj24-star/threadcycle-exchange-app` when authorizing deployment. Do not include `.env`, database credentials, passwords, or admin keys. `public/images/demo-*.webp` are bundled static illustrations; member photos and marketplace data are in MongoDB. A free-service `render.yaml` Blueprint is included.
 2. In Atlas, create an M0 Free cluster and a database-only user with a long unique password and the least privileges needed for this database. Configure the network access permitted by your deployment environment. Atlas free cluster limits and no-backup/idle behavior apply; do not use it as the sole store for irreplaceable data.
 3. In Render, create a **Free Web Service** from the authorized repository, set Build Command `npm ci --omit=dev`, Start Command `npm start`, and supply the database URI when the Blueprint requests it. The Blueprint generates `SESSION_SECRET` as a protected environment variable; do not paste it into source code or Git. In the service’s environment settings set:
    - `NODE_ENV=production`
@@ -57,7 +57,7 @@ The source is prepared for a free Render web service connected to a persistent M
 
 ### Deployment is currently blocked
 
-The available browser is stopped at the Render sign-in page. No authorized Git repository/remote, deployment connector/CLI, or MongoDB URI is configured. The Render Blueprint is configured to generate the session secret securely after an authorized deployment. This project has **not** been deployed and there is no verified public link yet. An owner must connect the source from an authorized private Git repository, sign into the free hosting account, and provide the persistent MongoDB URI through the coordinator’s secure secret form before deployment can proceed. Do not send credentials in chat.
+The source is maintained in the owner's existing private GitHub repository. Render deployment has not been authorized, and no persistent MongoDB URI is configured. The Render Blueprint is configured to generate the session secret securely after an authorized deployment. This project has **not** been deployed and there is no verified public link yet. An owner must authorize the Render account and provide the persistent MongoDB URI through the coordinator’s secure secret form before deployment can proceed. Do not send credentials in chat.
 
 ## Project files
 

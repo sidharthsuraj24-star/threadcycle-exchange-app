@@ -38,7 +38,15 @@ function routeInfo() {
   const url = new URL(location.href);
   return { path: url.pathname.replace(/\/$/, '') || '/', query: url.searchParams };
 }
-function navigate(path) { history.pushState({}, '', path); render(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+function navigate(path) {
+  history.pushState({}, '', path);
+  const hash = new URL(path, location.origin).hash;
+  void render().then(() => {
+    const target = hash ? document.getElementById(decodeURIComponent(hash.slice(1))) : null;
+    if (target) target.scrollIntoView({ behavior: 'smooth' });
+    else window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+}
 function logo() { return `<a class="brand" href="/" data-link aria-label="Second Loop home"><span class="brand-mark">S</span><span class="brand-text">second <span>loop</span></span></a>`; }
 function header(path) {
   const link = (href, text, active) => `<a href="${href}" data-link class="${active ? 'active' : ''}">${text}</a>`;
@@ -61,6 +69,12 @@ function listingCard(item, match = null) {
   const url = `/listings/${encodeURIComponent(item.id)}`;
   return `<article class="listing-card"><a class="listing-card-media" href="${url}" data-link aria-label="View ${escapeHTML(item.title)}">${img(item.imageUrls?.[0], `${item.title} clothing listing${item.isDemo ? ', illustrative demo photo' : ''}`)}${item.isDemo ? `<span style="position:absolute;left:10px;top:10px">${demoBadge(true)}</span>` : ''}</a><div class="listing-card-body"><div class="listing-kicker"><span>${escapeHTML(item.category)} · ${escapeHTML(item.size)}</span>${match ? `<span class="match-note">${match.sameCity ? '● Same city' : `${match.matchScore}% match`}</span>` : ''}</div><h3><a href="${url}" data-link>${escapeHTML(item.title)}</a></h3><div class="listing-meta"><span>${escapeHTML(item.condition)}</span><span>·</span><span>${escapeHTML(item.city)}</span></div><div class="listing-bottom"><span class="value-tag">~${money(item.estimatedValue)} <span class="sr-only">indicative estimate</span></span><a class="button button-quiet button-small" href="${url}" data-link>View item <span aria-hidden="true">→</span></a></div></div></article>`;
 }
+function browseChip(label, value, current, query) {
+  const params = new URLSearchParams(query.toString());
+  if (value) params.set('category', value); else params.delete('category');
+  params.delete('view');
+  return `<button class="category-chip${current === value ? ' active' : ''}" type="button" data-category="${escapeHTML(value)}" aria-pressed="${current === value}" data-query="${escapeHTML(params.toString())}">${escapeHTML(label)}<span aria-hidden="true">↗</span></button>`;
+}
 function pageHead(label, title, body) { return `<div class="page-head"><div class="eyebrow">${escapeHTML(label)}</div><h1>${escapeHTML(title)}</h1><p class="lede">${escapeHTML(body)}</p></div>`; }
 function disclaimer(message = 'Illustrative demo listings only. Sample people, items, photos, and activity are not real member offers or completed swaps.') {
   return `<aside class="disclaimer"><span class="disclaimer-mark">i</span><span><b>Demo content:</b> ${escapeHTML(message)}</span></aside>`;
@@ -71,7 +85,8 @@ async function renderBrowse(query) {
   const params = new URLSearchParams(); if (q) params.set('q', q); if (category) params.set('category', category); if (city) params.set('city', city);
   const data = await api(`/api/listings${params.size ? `?${params}` : ''}`);
   const hero = `<section class="hero"><div class="container hero-grid"><div class="hero-copy"><div class="eyebrow">A slower kind of style</div><h1>Good clothes.<br><em>New chapters.</em></h1><p>Trade a piece you’ve outgrown for one you’ll reach for again. One direct swap at a time, on your terms.</p><div class="hero-cta"><a class="button" href="#the-wardrobe">Explore the wardrobe <span aria-hidden="true">↓</span></a>${currentUser ? `<a class="button button-outline" href="/dashboard" data-link>List a piece</a>` : `<a class="button button-outline" href="/register" data-link>Join the community</a>`}</div><p class="hero-note">No payments. No courier booking. Negotiate the details directly.</p></div><div class="hero-art">${img('/images/demo-8.webp', 'Illustrative wardrobe of clothing, not a live marketplace offer', 'hero-photo')}<div class="hero-sticker">Wear it<br>again<small>give good clothes another loop</small></div><div class="hero-card"><strong>Swap on your terms</strong><span>Compare estimates · agree the details together</span></div></div></div></section>`;
-  const filter = `<div class="container">${disclaimer('Cards tagged illustrative are sample content; real member listings can be exchanged. City is broad user-entered text only.') }<section class="section" id="the-wardrobe"><div class="section-head"><div><div class="eyebrow">The shared wardrobe</div><h2>Find your next favourite</h2><p>Browse labeled demo examples alongside real member listings when members have posted them.</p></div><span class="pill">${data.total} available item${data.total === 1 ? '' : 's'}</span></div><form class="filter-bar" id="filter-form"><div class="field search-field"><label for="search-q">Search pieces</label><div class="search-input-wrap"><span class="search-glyph" aria-hidden="true">⌕</span><input class="input" id="search-q" name="q" value="${escapeHTML(q)}" placeholder="Try denim, linen, everyday…" maxlength="60"></div></div><div class="field"><label for="search-category">Category</label><select class="select" id="search-category" name="category"><option value="">All categories</option>${categories.map((c) => `<option${selected(category, c)}>${escapeHTML(c)}</option>`).join('')}</select></div><div class="field"><label for="search-city">City</label><input class="input" id="search-city" name="city" value="${escapeHTML(city)}" placeholder="Your city" maxlength="60"></div><button class="button" type="submit">Find pieces <span aria-hidden="true">→</span></button></form><div class="listing-grid">${data.items.length ? data.items.map((item) => listingCard(item)).join('') : `<div class="empty-state no-results"><strong>No pieces just yet</strong>Try widening your filters. City is a member-entered city name—not a distance or GPS search.</div>`}</div></section></div>`;
+  const categoryBrowse = `<div class="category-browse"><div class="category-browse-head"><div class="eyebrow">Browse by category</div><h2>Start with what you love</h2><p>Pick a kind of piece, then search by size, details, or member-entered city.</p></div><nav class="category-chips" aria-label="Browse clothing categories">${browseChip('All pieces', '', category, query)}${categories.map((name) => browseChip(name, name, category, query)).join('')}</nav></div>`;
+  const filter = `<div class="container">${disclaimer('Cards tagged illustrative are sample content; real member listings can be exchanged. City is broad user-entered text only.') }<section class="section" id="the-wardrobe"><div class="section-head"><div><div class="eyebrow">The shared wardrobe</div><h2>Find your next favourite</h2><p>Browse labeled demo examples alongside real member listings when members have posted them.</p></div><span class="pill">${data.total} available item${data.total === 1 ? '' : 's'}</span></div>${categoryBrowse}<form class="filter-bar" id="filter-form"><div class="field search-field"><label for="search-q">Search pieces</label><div class="search-input-wrap"><span class="search-glyph" aria-hidden="true">⌕</span><input class="input" id="search-q" name="q" value="${escapeHTML(q)}" placeholder="Try denim, linen, everyday…" maxlength="60"></div></div><div class="field"><label for="search-category">Category</label><select class="select" id="search-category" name="category"><option value="">All categories</option>${categories.map((c) => `<option${selected(category, c)}>${escapeHTML(c)}</option>`).join('')}</select></div><div class="field"><label for="search-city">City</label><input class="input" id="search-city" name="city" value="${escapeHTML(city)}" placeholder="Your city" maxlength="60"></div><button class="button" type="submit">Find pieces <span aria-hidden="true">→</span></button></form><div class="listing-grid">${data.items.length ? data.items.map((item) => listingCard(item)).join('') : `<div class="empty-state no-results"><strong>No pieces just yet</strong>Try widening your filters. City is a member-entered city name—not a distance or GPS search.</div>`}</div></section></div>`;
   layout(`${hero}${filter}`, '/');
 }
 async function renderMatches(embedded = false) {
@@ -249,6 +264,8 @@ async function clickHandler(event) {
   if (link && link.origin === location.origin && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
     event.preventDefault(); navigate(link.pathname + link.search + link.hash); document.querySelector('.main-nav')?.classList.remove('open'); return;
   }
+  const category = event.target.closest('[data-category]');
+  if (category) { const query = category.dataset.query; navigate(`/${query ? `?${query}` : ''}#the-wardrobe`); return; }
   const button = event.target.closest('[data-action]'); if (!button) return;
   const action = button.dataset.action;
   try {
@@ -297,6 +314,7 @@ window.addEventListener('popstate', render);
   try {
     const data = await api('/api/me'); currentUser = data.user; csrfToken = data.csrfToken || '';
     await render();
+    if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView({ behavior: 'auto' });
   } catch (error) {
     layout(`<div class="container-narrow" style="padding:80px 0"><div class="empty-state"><strong>Marketplace data is not connected</strong>This app uses MongoDB for durable accounts, listings, photo storage, swaps, and messages. Configure the required database and session environment variables; no local or in-memory production store is used.</div></div>`, '/');
   }

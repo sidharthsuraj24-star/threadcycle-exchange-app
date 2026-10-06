@@ -4,14 +4,12 @@
 
 ## Observed blockers
 
-- `https://vercel.com/dashboard` opened the Vercel login screen in the current browser.
-- `https://dashboard.render.com` opened the Render sign-in screen in the current browser.
-- No configured hosting/deployment connector or hosting CLI was present.
-- No Git repository or remote is configured for this source, and no authorized source-control account is connected. Render’s Blueprint needs the project in an authorized Git repository.
+- No authorized Render account session or deployment connector/CLI is available for this task.
+- The source is in the owner's existing private GitHub repository `sidharthsuraj24-star/threadcycle-exchange-app`; Render still needs the owner to authorize access to that repository and account.
 - No MongoDB URI or related deployment environment variable is configured in this workspace. The included free-tier Render Blueprint is set to generate a fresh session secret as a protected host variable.
 - The app intentionally refuses production startup without a real MongoDB URI and a 32-byte `SESSION_SECRET`; it does not use local uploads or an in-memory/file fallback.
 
-Per the task instructions, deployment stopped before sign-in, identity verification, account creation, terms approval, or paid resource selection. No credentials were entered and no cloud resources were created.
+Per the task instructions, no deployment was started. No credentials were entered, no cloud resources were created, and no public app URL was provisioned.
 
 ## What is ready
 
@@ -19,7 +17,7 @@ The source is under `/workspace/clothing-swap-marketplace`. It is prepared for a
 
 ## What must be supplied or authorized
 
-1. Put the source in a **private Git repository** under the account you authorize (the attached ZIP can be used); connect that repository to **Render Free** by signing into the owner’s Render account. The current browser is stopped on Render’s sign-in page.
+1. Sign in to the owner's Render account and authorize the existing **private** GitHub repository `sidharthsuraj24-star/threadcycle-exchange-app` for a **Render Free** Web Service. Do not create another repository or select a paid service.
 2. Create/authorize a **MongoDB Atlas M0 Free** database, and provide its application connection URI through the coordinator’s secure secret form (`MONGODB_URI`; secret). The URI must point to a database-only user with the database name included and a URL-encoded password.
 3. Keep the Blueprint-generated `SESSION_SECRET` in the host’s protected environment; do not put it in Git or source files. If deploying manually instead, generate and enter a fresh value of at least 32 random bytes in the host’s secret field.
 4. Allow only free-tier resources. Do not accept any upgrade/payment/billing/identity/terms request without separate user authorization.
