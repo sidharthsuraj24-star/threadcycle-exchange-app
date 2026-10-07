@@ -2,7 +2,7 @@
 
 A responsive clothing-exchange marketplace demo built with **HTML, CSS, browser JavaScript, Node.js, Express, and MongoDB**. It supports member registration/login, persistent clothing listings and images, one-for-one swap requests, negotiation chat, city/value matching, a separate sustainable-fashion community feed, dashboards, and administrator moderation.
 
-**Demo-data warning:** eight sample listings and corresponding sample profiles are included to make the interface understandable. All are labeled as illustrative, have no credentials, are not real member offers, cannot receive swap requests, and are excluded from KPI/matching activity. No actual users, exchanges, environmental benefits, payment, or delivery are claimed.
+**Demo-data warning:** twelve sample listings across all seven categories and corresponding sample profiles are included to make the interface understandable. All are labeled as illustrative, have no credentials, are not real member offers, cannot receive swap requests, and are excluded from KPI/matching activity. No actual users, exchanges, environmental benefits, payment, or delivery are claimed.
 
 ## What works
 

@@ -35,7 +35,7 @@ const listingSchema = new Schema({
   status: { type: String, enum: ['available', 'reserved', 'swapped', 'removed', 'hidden'], default: 'available', index: true },
   images: { type: [imageSchema], default: [], select: false },
   imageCount: { type: Number, default: 0 },
-  demoImageNo: { type: Number, min: 1, max: 8 },
+  demoImageNo: { type: Number, min: 1, max: 12 },
   demoKey: { type: String, sparse: true, unique: true },
   isDemo: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },

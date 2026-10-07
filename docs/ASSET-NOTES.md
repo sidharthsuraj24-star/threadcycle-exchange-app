@@ -1,6 +1,6 @@
 # Illustrative demo asset notes
 
-The eight optimized `public/images/demo-*.webp` files are locally bundled visual reference photos selected via image search for the interface’s clearly labeled sample catalog. They are not submitted by members, do not represent live offers or personal data, and cannot be used to send a swap request. The corresponding demo user records have no login credential and use the reserved `.invalid` email domain.
+The twelve optimized `public/images/demo-*.webp` files are locally bundled visuals for the interface’s clearly labeled sample catalog. The original eight are visual reference photos selected via image search; the four added for shoes and accessories are original AI-generated product concepts, not photographs of real member items. None are submitted by members, represent live offers or personal data, and cannot be used to send a swap request. The corresponding demo user records have no login credential and use the reserved `.invalid` email domain.
 
 Original search-media source URLs are recorded here for traceability:
 

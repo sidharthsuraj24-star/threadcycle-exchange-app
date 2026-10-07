@@ -4,7 +4,7 @@
 
 Second Loop is a responsive web marketplace for direct, one-for-one clothing exchanges. Members list wearable items, browse real member offers, request swaps, discuss them in a private thread, and record a separate agreement before they record completion. The product does not sell clothing, collect payments, use AI or AR, or provide a native mobile app.
 
-Eight seeded cards are **illustrative demo content**. Names, items, images, cities, and values are synthetic, clearly labeled, non-contactable, and excluded from live member matching and analytics. No user, physical swap, delivery, environmental benefit, or community outcome is fabricated.
+Twelve seeded cards are **illustrative demo content**. Names, items, images, cities, and values are synthetic, clearly labeled, non-contactable, and excluded from live member matching and analytics. No user, physical swap, delivery, environmental benefit, or community outcome is fabricated.
 
 ## Users and permissions
 

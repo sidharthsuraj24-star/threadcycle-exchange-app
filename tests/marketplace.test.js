@@ -77,9 +77,9 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     await agentA.get('/app.js').expect(200).expect('Content-Type', /javascript/);
     const result = await agentA.get('/api/listings');
     assert.equal(result.status, 200, JSON.stringify(result.body));
-    assert.equal(result.body.total, 8);
+    assert.equal(result.body.total, 12);
     assert.ok(result.body.items.every((x) => x.isDemo === true && x.demoLabel.includes('Illustrative demo')));
-    assert.equal((await User.countDocuments({ isDemo: true })), 8);
+    assert.equal((await User.countDocuments({ isDemo: true })), 12);
     assert.equal((await User.countDocuments({ isDemo: true, passwordHash: { $exists: true } })), 0);
   });
 
