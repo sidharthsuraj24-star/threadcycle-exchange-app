@@ -8,11 +8,11 @@ Eight seeded cards are **illustrative demo content**. Names, items, images, citi
 
 ## Users and permissions
 
-- **Visitor:** browse/filter available offers and inspect item details; cannot message or request a demo listing.
-- **Registered member:** manage their profile and listings; request and respond to swaps; message the other participant; propose and confirm negotiated terms; record their own completion confirmation; and, after both participants confirm terms, enter private hand-off/shipment notes.
-- **Administrator:** review record-based KPIs and swap-state history, suspend/restore members, hide/restore listings, and close a disputed request with a moderation note. Admins cannot attest to a real-world swap or access shipment references through the admin overview. Admin access is never self-assigned.
+- **Visitor:** browse/filter available offers, inspect item details, and read the public community feed; cannot create a community post/comment, like, report, message, or request a demo listing.
+- **Registered member:** manage their profile and listings; request and respond to swaps; message the other participant; propose and confirm negotiated terms; record their own completion confirmation; enter private hand-off/shipment notes after terms confirmation; and participate in the separate public community by posting, commenting, liking, reporting, and removing their own posts.
+- **Administrator:** review record-based KPIs and swap-state history, suspend/restore members, hide/restore listings and community posts, review/dismiss community reports, and close a disputed request with a moderation note. Admins cannot attest to a real-world swap or access shipment references through the admin overview. Admin access is never self-assigned.
 
-## Connected experience: seven top-level screen groups
+## Connected experience: eight top-level screen groups
 
 1. **Discover / city-match view:** public browsing and filters, with a signed-in member’s city-level match view embedded in Discover.
 2. **Login / registration.**
@@ -21,8 +21,9 @@ Eight seeded cards are **illustrative demo content**. Names, items, images, citi
 5. **Messages:** inbox and participant-only thread.
 6. **Member dashboard / profile.**
 7. **Admin panel.**
+8. **Community:** a public, text-first sustainable-fashion discussion area, distinct from private swap conversations.
 
-These groups connect through browser routes. The profile editor is integrated into the member dashboard. Matching uses member-entered city text, never GPS, distance, or radius data.
+These groups connect through browser routes. The profile editor is integrated into the member dashboard. Matching uses member-entered city text, never GPS, distance, or radius data. The community feed is not a swap-chat channel.
 
 ## Core behavior and lifecycle
 
@@ -36,7 +37,11 @@ After both participants confirm the current terms, either participant may enter 
 
 ## Matching
 
-The match endpoint prioritizes real available listings whose member-entered city exactly matches the selected city (case-insensitive), then includes other-city offers as clearly labeled value-fit alternatives. Matching uses the city name and the relative difference between the member’s active-listing estimate and the candidate estimate. It is **city-level matching, not geospatial proximity**: no coordinates, GPS, street addresses, distance, or radius are collected or inferred.
+The match endpoint prioritizes real available listings whose member-entered city matches the selected city after Unicode normalization, trimming, whitespace collapse, and case-insensitive comparison; it then includes other-city offers as clearly labeled value-fit alternatives. Matching uses the city name and the relative difference between the member’s active-listing estimate and the candidate estimate. It is **city-level matching, not geospatial proximity**: no coordinates, GPS, street addresses, distance, or radius are collected or inferred. City aliases and different spellings are not resolved automatically.
+
+## General community
+
+The public Community route is separate from private swap chat and supports text-only posts in sustainable-fashion topics, comments, and toggleable likes. Signed-in members may report another member’s post with a reason; they cannot report their own. Authors may remove their posts from the public feed. Role-gated administrators can review open reports, dismiss a report or hide its post, and restore a hidden post. Hidden/deleted post content is not returned in public feed results. Community endpoints return public author names, not emails. Member-authored content is unverified; the UI asks users to avoid contact details and exact addresses. The MVP has no media uploads, nested groups, follow graph, direct messages, or per-comment report action.
 
 ## First-party analytics and KPI definitions
 
@@ -54,17 +59,17 @@ Tracked member actions are successful registration, profile/listing changes, swa
 
 ## Data and privacy
 
-MongoDB persists accounts, bcrypt password hashes, profile city/bio, listings/photos, swap records, messages, first-party activity events, server-side sessions, and short-lived shared rate-limit counters. The rate-limit store saves only a secret-keyed HMAC of the limiter's client key (not the raw IP) and expires the counter after its configured window. Public listing output does not disclose email. Status/agreement histories store actor IDs and timestamps without name/email duplication. Participant-only shipment fields and status history do not appear in public listing responses or the admin overview. The UI instructs members not to enter payment details, phone numbers, or exact addresses in negotiated terms/messages; free-form member text cannot be guaranteed free of personal details, so participants should minimize it.
+MongoDB persists accounts, bcrypt password hashes, profile city/bio, listings/photos, swap records, private messages, public community posts/comments/reports, first-party activity events, server-side sessions, and short-lived shared rate-limit counters. The rate-limit store saves only a secret-keyed HMAC of the limiter's client key (not the raw IP) and expires the counter after its configured window. Public listing and community-post output does not disclose email. Status/agreement histories store actor IDs and timestamps without name/email duplication. Participant-only shipment fields and status history do not appear in public listing responses or the admin overview. The UI instructs members not to enter payment details, phone numbers, or exact addresses in negotiated terms/messages/community posts; free-form member text cannot be guaranteed free of personal details, so participants should minimize it.
 
 Session cookies are HTTP-only and SameSite Strict; production and Vercel HTTPS cookies are Secure. State-changing API routes require a session CSRF token and same-origin request. Image uploads verify JPEG/PNG/WebP signatures, cap each image at 1 MB and each listing at four images, and store bytes in MongoDB. The 1 MB cap keeps the maximum four-file multipart upload below Vercel Functions' 4.5 MB request-body ceiling; JSON and URL-encoded request bodies remain bounded at 64 KB and 16 KB. Bounded fields, fixed enums, escaped user content, authentication rate limits, and role/participant checks are required.
 
 ## Admin overview
 
-The admin panel retains database-record counts for registered non-demo members, available non-demo listings, requests, current accepted swaps, disputes, and two-member completion confirmations. It also shows the defined 30-day active-member, engaged-member, engagement-rate, and request-acceptance metrics. A completion is always labeled as member-confirmed; it is not presented as independently verified delivery or impact. Admin collections show only the newest 30 records; search/pagination is not implemented.
+The admin panel retains database-record counts for registered non-demo members, available non-demo listings, requests, current accepted swaps, disputes, and two-member completion confirmations. It also shows the defined 30-day active-member, engaged-member, engagement-rate, and request-acceptance metrics, plus a bounded queue of open community reports and controls to hide/dismiss reported posts or restore hidden posts. A completion is always labeled as member-confirmed; it is not presented as independently verified delivery or impact. Admin collections show only the newest 30 records; search/pagination is not implemented.
 
 ## Explicit exclusions and remaining limitations
 
-No payments, cash sale, checkout, AI recommendations, AR/virtual try-on, GPS/location tracking, native app, external identity verification, courier booking, provider API, shipping rates/labels, public tracking page, or environmental-impact claim is included. The manual participant-only shipment metadata is a limited feature, **not** courier integration. Vercel is the intended host only for the authorized noncommercial student demo; source preparation is not deployment. Deployment is on hold until the owner chooses a courier provider. The original briefs’ live-deployed-link criterion has not been met or verified. Production database durability, backups, live browser behavior, and performance at scale remain unverified. Nearby geographic search, historical reconstruction of missing legacy transition events, admin pagination, and verified physical outcomes remain limitations.
+No payments, cash sale, checkout, AI recommendations, AR/virtual try-on, GPS/location tracking, native app, external identity verification, courier booking, provider API, shipping rates/labels, public tracking page, or environmental-impact claim is included. Courier integration remains intentionally deferred; manual participant-only shipment metadata is not courier integration. The community feed is a text-first discussion MVP, not nested groups or private message channels. The existing live site is [threadcycle-exchange-app.vercel.app](https://threadcycle-exchange-app.vercel.app/); this update builds on production commit `6e0e0988` and targets the existing `vercel-preparation` branch. Vercel project settings are unchanged. Verify each release against its deployed SHA and public HTTP behavior. Production database durability, backups, and performance at scale remain unverified. Nearby geographic search, city-alias resolution, historical reconstruction of missing legacy transition events, admin pagination, and verified physical outcomes remain limitations.
 
 ## Acceptance criteria
 
@@ -74,8 +79,10 @@ No payments, cash sale, checkout, AI recommendations, AR/virtual try-on, GPS/loc
 - Status transitions persist an actor ID and timestamp. New requests and subsequent status changes have a durable audit trail; no unknown legacy actor/time is invented.
 - After negotiation, both participants must confirm the exact current terms before either completion confirmation can be accepted. Terms confirmation and final completion confirmation remain separate.
 - Matching returns actual same-city member opportunities first and clearly explains that matching is city-level, not geospatial; different-city alternatives are distinguished.
+- City input is normalized for whitespace and Unicode compatibility; same-city matching ignores case and repeated spaces without collecting coordinates or resolving aliases.
+- The public Community route supports topic-filtered text posts, comments, likes, reports, author removal, admin hide/dismiss/restore, and safe rendering; it remains separate from swap chat and does not expose email.
 - Private manually entered shipment metadata/status is available to only the two participants after bilateral terms confirmation. No courier call, booking, rate/label, payment, public tracking page, or false provider claim exists.
 - First-party analytics implement the above 30-day definitions and disclose the exact numerators/denominators, retention, and exclusions.
 - Admin actions are role-gated and cannot fabricate a real-world completion.
-- Tests use an ephemeral MongoDB server; they verify code behavior only, not durable production storage or a public deployment.
-- Deployment is a separate acceptance requirement and is **not met** until the courier-provider choice release gate is resolved, a user-authorized Vercel deployment and persistent database are configured, and a reachable health check is verified. Source preparation does not satisfy this criterion.
+- Tests use an ephemeral MongoDB server; they verify code behavior only, not durable production storage or the behavior of updates on the live site.
+- Production releases use `vercel-preparation`, keep `main` unchanged, and leave Vercel project settings alone; verify the deployed commit and public HTTP routes before treating an update as live.

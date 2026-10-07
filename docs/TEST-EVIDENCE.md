@@ -1,34 +1,29 @@
-# Final local test evidence
+# Local verification evidence
 
-The checks below were run in `/workspace/threadcycle-vercel-prep`, an isolated clone of the private repository at `main` commit `2522c30f59f538cd4e99f9560326940551e6b550`, on **2026-10-06**. The original working tree and its unrelated uncommitted files were not edited. These are local preparation checks, not deployment checks.
+The city-normalization and community changes were implemented in `/workspace/threadcycle-production-review`, branch `cue-city-community-work`, based on production commit `6e0e0988`, on **2026-10-06**. Final checks were rerun on **2026-10-07**. These commands document local automated verification; release/deployment checks are separate.
 
 ```text
+=== npm ci ===
+PASS — installed 172 locked packages; npm reported 0 vulnerabilities.
+
 === npm run check ===
-PASS — Node syntax checks for index.js, server/app.js, server/database.js,
-server/rate-limit-store.js, server/models.js, public/app.js, server/index.js,
-and tests/marketplace.test.js.
+PASS — Node syntax checks for index.js, server/app.js, server/city.js,
+server/database.js, server/rate-limit-store.js, server/models.js,
+public/app.js, server/index.js, and tests/marketplace.test.js.
 
 === npm test ===
-ℹ tests 12
-ℹ pass 12
+ℹ tests 15
+ℹ pass 15
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
-ℹ duration_ms 6203.200427
-The suite used an ephemeral mongodb-memory-server test database and stopped it.
-
-=== Vercel mode import smoke ===
-{"handler":"function","persistentSessionConfiguration":true,"expressStaticMiddleware":0,"wildcardFallback":0}
-The session-store factory was stubbed only for this import-path check; no production database was contacted.
-
-=== vercel.json validation ===
-PASS — official Vercel project schema (Draft 4), downloaded from
-https://openapi.vercel.sh/vercel.json
+ℹ duration_ms 9475.790592
+The suite used a disposable single-node MongoDB replica set and stopped it.
 
 === git diff --check ===
 PASS — no whitespace errors.
 ```
 
-Coverage includes the root Express handler/config header shape, the 1 MB photo rejection, existing authentication/CSRF and marketplace flows, and MongoDB-backed rate-limit counters shared across store instances without persisting raw client keys. `npm run check`, `npm test`, the Vercel import smoke, the official-schema validation, and `git diff --check` all passed locally.
+The integration coverage includes normalized city input and case/spacing-insensitive match and browse filters; separation of the existing comparable retail-price reference from server-calculated swap estimates; public/category-filtered community browsing; authenticated posting, comments, toggleable likes, and reports; duplicate open-report rejection; self-report prevention; author-only soft deletion; admin report review and hide/restore behavior; and HTML escaping of community content. Existing production security, photo privacy, swap, analytics, and rate-limit tests also pass.
 
-These checks do not establish a production MongoDB connection, Vercel project/build/deployment, public service, production browser behavior, backup/restore, provider integration, physical exchange/delivery, or environmental impact. No deployment or paid resources were used, and there is no live URL.
+The tests demonstrate local code behavior only. They do not verify Vercel build/deployment, production database durability/backups, browser/viewport experience, load, courier-provider behavior, real exchanges, or environmental impact. Public HTTP and Vercel release checks are separate from this local test evidence; courier integration remains deferred by product choice.

@@ -20,6 +20,8 @@ let userNia;
 let listingA;
 let listingB;
 let listingOtherCity;
+let communityPostId;
+let communityReportId;
 let mainSwapId;
 let otherCityAgent;
 let outsider;
@@ -50,7 +52,7 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
   process.env.MONGODB_URI = mongo.getUri('clothing_swap_test');
   process.env.SESSION_SECRET = 'test-session-secret-long-enough-to-meet-minimum-32-bytes';
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
-  const { User, Listing, Swap, ActivityEvent, RateLimitCounter } = require('../server/models');
+  const { User, Listing, Swap, ActivityEvent, RateLimitCounter, CommunityPost, CommunityReport } = require('../server/models');
   await Promise.all([User.createIndexes(), Listing.createIndexes(), Swap.createIndexes()]);
   app = require('../server/app').app;
   app.set('trust proxy', 1);
@@ -67,7 +69,7 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     const html = await agentA.get('/').expect(200);
     assert.match(html.text, /Second Loop/);
     assert.match(html.headers['content-security-policy'], /default-src 'self'/);
-    for (const route of ['/login', '/register', '/dashboard?tab=profile', '/matches', '/profile', '/admin', '/messages/example', '/swap/new', '/listings/example']) {
+    for (const route of ['/login', '/register', '/dashboard?tab=profile', '/matches', '/community', '/profile', '/admin', '/messages/example', '/swap/new', '/listings/example']) {
       const page = await agentA.get(route).expect(200);
       assert.match(page.text, /id="app"/, `${route} should serve the single-page app on a direct load`);
     }
@@ -84,9 +86,10 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
   await t.test('registration validates, hashes passwords, rotates session, and limits the public profile', async () => {
     const token = await csrf(agentA);
     await agentA.post('/api/register').set('x-csrf-token', token).send({ name: 'Ada Member', email: 'ada@example.test', city: 'Pune', password: 'tiny' }).expect(400);
-    const created = await createMember(agentA, 'Ada Member', 'ada@example.test', 'Pune');
+    const created = await createMember(agentA, 'Ada Member', 'ada@example.test', '  Pune   ');
     csrfA = created.csrf; userA = created.user;
     assert.equal(userA.role, 'member');
+    assert.equal(userA.city, 'Pune', 'registration trims and collapses city whitespace');
     assert.equal('passwordHash' in userA, false);
     const stored = await User.findById(userA.id).select('+passwordHash').lean();
     assert.notEqual(stored.passwordHash, 'A-safe-test-password-2026!');
@@ -109,10 +112,10 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     await agentA.patch('/api/profile').send({ name: 'Changed Name', city: 'Pune' }).expect(403);
     await supertest(app).post('/api/login').send({ email: 'ada@example.test', password: 'A-safe-test-password-2026!' }).expect(403);
     await agentA.patch('/api/profile').set('Origin', 'https://attacker.invalid').set('x-csrf-token', csrfA).send({ name: 'Forged origin', city: 'Pune' }).expect(403);
-    await agentA.patch('/api/profile').set('x-csrf-token', csrfA).send({ name: '<img src=x onerror=alert(1)>', city: 'Pune', bio: '<script>text</script>' }).expect(200);
+    await agentA.patch('/api/profile').set('x-csrf-token', csrfA).send({ name: '<img src=x onerror=alert(1)>', city: '  PuNe   ', bio: '<script>text</script>' }).expect(200);
     const profile = (await agentA.get('/api/profile').expect(200)).body.profile;
     assert.match(profile.name, /<img/);
-    assert.equal(profile.city, 'Pune');
+    assert.equal(profile.city, 'PuNe', 'normalization preserves the member’s city-name casing for display');
   });
 
   await t.test('listing creation validates photos, strips EXIF metadata, and preserves server-side value rules', async () => {
@@ -175,7 +178,8 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
   });
 
   await t.test('a real member can filter by coarse city, but demo samples are not match candidates', async () => {
-    const created = await createMember(agentB, 'Sam Member', 'sam@example.test', 'Pune'); csrfB = created.csrf; userB = created.user;
+    const created = await createMember(agentB, 'Sam Member', 'sam@example.test', '  pUnE   '); csrfB = created.csrf; userB = created.user;
+    assert.equal(userB.city, 'pUnE');
     listingB = await addListing(agentB, csrfB, { title: 'Indigo cotton jacket', category: 'Outerwear', size: 'L', brandTier: 'Premium', comparableRetailPrice: '9000000' });
     assert.equal(listingB.estimatedValue, 1600);
     assert.equal(listingB.comparableRetailPrice, 9000000);
@@ -183,19 +187,59 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     const otherCityCreated = await createMember(otherCityAgent, 'Ravi Member', 'ravi@example.test', 'Mumbai'); userOtherCity = otherCityCreated.user;
     listingOtherCity = await addListing(otherCityAgent, otherCityCreated.csrf, { title: 'Mumbai linen shirt', category: 'Tops', city: 'Mumbai' });
     assert.equal(listingOtherCity.comparableRetailPrice, null, 'the comparison price is optional');
-    const matches = await agentA.get('/api/matches?city=Pune').expect(200);
+    const matches = await agentA.get('/api/matches').query({ city: '  PUNE   ' }).expect(200);
     const sameCity = matches.body.items.find((entry) => entry.item.id === listingB.id);
     const differentCity = matches.body.items.find((entry) => entry.item.id === listingOtherCity.id);
     assert.equal(sameCity.sameCity, true);
     assert.equal(differentCity.sameCity, false);
     assert.equal(matches.body.items[0].sameCity, true, 'actual same-city offers rank before other-city alternatives');
-    assert.match(matches.body.locationMethod, /city-level/);
+    assert.match(matches.body.locationMethod, /normalized city-level/i);
+    assert.match(matches.body.locationMethod, /case and spacing insensitive/);
     assert.match(matches.body.locationMethod, /not geospatial/);
-    const browse = await agentA.get('/api/listings?city=Pune');
+    const browse = await agentA.get('/api/listings').query({ city: '  PUNE   ' });
     assert.equal(browse.status, 200, JSON.stringify(browse.body));
-    assert.ok(browse.body.items.every((x) => x.city === 'Pune'));
+    assert.ok(browse.body.items.every((x) => x.city.toLocaleLowerCase() === 'pune'));
     const sample = (await agentA.get('/api/listings').expect(200)).body.items.find((item) => item.isDemo);
     await agentA.post('/api/swaps').set('x-csrf-token', csrfA).send({ requestedListingId: sample.id, offeredListingId: listingA.id }).expect(409);
+  });
+
+  await t.test('sustainability community posts are public to browse and require membership to interact', async () => {
+    await supertest(app).post('/api/community/posts').send({ title: 'Guest post', body: 'Not allowed', category: 'Clothing Care' }).expect(401);
+    await agentB.get('/api/admin/community/reports').expect(403);
+    const created = await agentA.post('/api/community/posts').set('x-csrf-token', csrfA)
+      .send({ title: 'Cold-water cotton care', body: 'A useful member tip. <script>text only</script>', category: 'Clothing Care' }).expect(201);
+    communityPostId = created.body.post.id;
+    assert.equal(created.body.post.author.id, userA.id);
+    const noSelfReport = await agentA.post(`/api/community/posts/${communityPostId}/reports`).set('x-csrf-token', csrfA).send({ reason: 'Self-report.' }).expect(403);
+    assert.match(noSelfReport.body.error, /own post/);
+
+    await agentB.post(`/api/community/posts/${communityPostId}/comments`).set('x-csrf-token', csrfB).send({ body: 'Thanks for the practical tip.' }).expect(201);
+    const firstLike = await agentB.post(`/api/community/posts/${communityPostId}/like`).set('x-csrf-token', csrfB).send({}).expect(200);
+    assert.deepEqual(firstLike.body, { liked: true, likeCount: 1 });
+    const unliked = await agentB.post(`/api/community/posts/${communityPostId}/like`).set('x-csrf-token', csrfB).send({}).expect(200);
+    assert.deepEqual(unliked.body, { liked: false, likeCount: 0 });
+    await agentB.post(`/api/community/posts/${communityPostId}/like`).set('x-csrf-token', csrfB).send({}).expect(200);
+    const report = await agentB.post(`/api/community/posts/${communityPostId}/reports`).set('x-csrf-token', csrfB)
+      .send({ reason: 'Test report for moderation controls.' }).expect(201);
+    communityReportId = report.body.report.id;
+    await agentB.post(`/api/community/posts/${communityPostId}/reports`).set('x-csrf-token', csrfB)
+      .send({ reason: 'Duplicate open report.' }).expect(409);
+
+    const publicFeed = await supertest(app).get('/api/community/posts').query({ category: 'Clothing Care' }).expect(200);
+    assert.equal(publicFeed.body.total, 1);
+    assert.equal(publicFeed.body.posts[0].commentCount, 1);
+    assert.equal(publicFeed.body.posts[0].comments[0].body, 'Thanks for the practical tip.');
+    assert.equal('email' in publicFeed.body.posts[0].author, false);
+    assert.equal(publicFeed.body.posts[0].likedByMe, false, 'anonymous browsing does not inherit a member like state');
+    const memberFeed = await agentB.get('/api/community/posts').query({ category: 'Clothing Care' }).expect(200);
+    assert.equal(memberFeed.body.posts[0].likedByMe, true);
+    assert.equal((await agentA.get('/api/community/posts').query({ category: 'Fashion Tips' }).expect(200)).body.total, 0);
+    const ownPost = await agentB.post('/api/community/posts').set('x-csrf-token', csrfB)
+      .send({ title: 'My upcycling notes', body: 'A member-owned post.', category: 'Repair & Upcycling' }).expect(201);
+    await agentA.delete(`/api/community/posts/${ownPost.body.post.id}`).set('x-csrf-token', csrfA).send({}).expect(404);
+    await agentB.delete(`/api/community/posts/${ownPost.body.post.id}`).set('x-csrf-token', csrfB).send({}).expect(200);
+    assert.equal((await CommunityPost.findById(ownPost.body.post.id)).status, 'deleted');
+    await supertest(app).get(`/api/community/posts/${ownPost.body.post.id}`).expect(404);
   });
 
   await t.test('a request starts a private thread; only its two participants can read and write', async () => {
@@ -326,6 +370,20 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     assert.doesNotMatch(JSON.stringify(overview.body), /private-ref-123/);
     const adminMainSwap = overview.body.swaps.find((s) => s.id === mainSwapId);
     assert.equal('shipment' in adminMainSwap, false, 'admin overview does not receive participant-only shipment references');
+    const communityQueue = await agentA.get('/api/admin/community/reports').expect(200);
+    assert.equal(communityQueue.body.reports.length, 1);
+    assert.equal(communityQueue.body.reports[0].id, communityReportId);
+    assert.equal(communityQueue.body.reports[0].post.id, communityPostId);
+    await agentA.patch(`/api/admin/community/reports/${communityReportId}`).set('x-csrf-token', csrfA)
+      .send({ status: 'resolved', hidePost: true }).expect(200);
+    assert.equal((await CommunityPost.findById(communityPostId)).status, 'hidden');
+    await supertest(app).get(`/api/community/posts/${communityPostId}`).expect(404);
+    const hiddenPosts = await agentA.get('/api/admin/community/posts?status=hidden').expect(200);
+    assert.ok(hiddenPosts.body.posts.some((post) => post.id === communityPostId));
+    await agentA.patch(`/api/admin/community/posts/${communityPostId}`).set('x-csrf-token', csrfA)
+      .send({ hidden: false }).expect(200);
+    assert.equal((await CommunityPost.findById(communityPostId)).status, 'published');
+    assert.equal((await CommunityReport.findById(communityReportId)).status, 'resolved');
     const moderated = await addListing(agentB, csrfB, { title: 'Member piece for moderation' });
     await agentA.patch(`/api/admin/listings/${moderated.id}`).set('x-csrf-token', csrfA).send({ hidden: true }).expect(200);
     assert.equal((await Listing.findById(moderated.id)).status, 'hidden');
@@ -474,6 +532,34 @@ test('listing detail presents the optional comparable price separately and marks
   assert.match(appRoot.innerHTML, /₹4,200/);
   assert.match(appRoot.innerHTML, /not verified and not used to calculate the swap estimate or matches/);
   assert.match(appRoot.innerHTML, /Indicative swap-value estimate—not cash, a sale price, or a guarantee/);
+});
+
+test('community post cards escape member-authored titles, posts, and comments', async () => {
+  const appRoot = { innerHTML: '' };
+  const context = {
+    document: { getElementById: () => appRoot },
+    URL,
+    URLSearchParams,
+    location: { href: 'https://market.test/community', origin: 'https://market.test' }
+  };
+  vm.createContext(context);
+  const frontend = fs.readFileSync(require.resolve('../public/app.js'), 'utf8');
+  const bootstrapOffset = frontend.indexOf("appRoot.addEventListener('submit', submitHandler);");
+  assert.ok(bootstrapOffset > 0, 'frontend bootstrap boundary exists');
+  vm.runInContext(frontend.slice(0, bootstrapOffset), context, { filename: 'public/app.js' });
+  context.communityData = { total: 1, page: 1, pageCount: 1, posts: [{
+    id: 'post-1', title: '<img src=x onerror=alert(1)>', body: '<script>unsafe()</script>', category: 'Clothing Care',
+    author: { id: 'member-2', name: '<svg onload=alert(2)>' }, createdAt: new Date().toISOString(),
+    likeCount: 1, likedByMe: false, commentCount: 1,
+    comments: [{ id: 'comment-1', body: '<iframe>bad</iframe>', author: { id: 'member-3', name: '<b>name</b>' }, createdAt: new Date().toISOString() }]
+  }] };
+  vm.runInContext("currentUser = { id: 'member-1', name: 'Member', role: 'member' }; api = async () => communityData", context);
+  await vm.runInContext('renderCommunity(new URLSearchParams())', context);
+  assert.match(appRoot.innerHTML, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.match(appRoot.innerHTML, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
+  assert.match(appRoot.innerHTML, /&lt;svg onload=alert\(2\)&gt;/);
+  assert.match(appRoot.innerHTML, /&lt;iframe&gt;bad&lt;\/iframe&gt;/);
+  assert.doesNotMatch(appRoot.innerHTML, /<script>unsafe\(\)<\/script>/);
 });
 test.after(async () => {
   if (app?.locals?.sessionStore?.close) { try { await app.locals.sessionStore.close(); } catch {} }

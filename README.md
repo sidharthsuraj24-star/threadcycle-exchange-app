@@ -1,6 +1,6 @@
 # Second Loop
 
-A responsive clothing-exchange marketplace demo built with **HTML, CSS, browser JavaScript, Node.js, Express, and MongoDB**. It supports member registration/login, persistent clothing listings and images, one-for-one swap requests, negotiation chat, city/value matching, dashboards, and administrator moderation.
+A responsive clothing-exchange marketplace demo built with **HTML, CSS, browser JavaScript, Node.js, Express, and MongoDB**. It supports member registration/login, persistent clothing listings and images, one-for-one swap requests, negotiation chat, city/value matching, a separate sustainable-fashion community feed, dashboards, and administrator moderation.
 
 **Demo-data warning:** eight sample listings and corresponding sample profiles are included to make the interface understandable. All are labeled as illustrative, have no credentials, are not real member offers, cannot receive swap requests, and are excluded from KPI/matching activity. No actual users, exchanges, environmental benefits, payment, or delivery are claimed.
 
@@ -10,7 +10,8 @@ A responsive clothing-exchange marketplace demo built with **HTML, CSS, browser 
 - CSRF token and same-origin checks on state-changing requests, authentication/upload rate limits, bounded input, fixed enums, parameterized Mongo queries, HTML-escaped client rendering, administrator role gates.
 - Listing create/edit/remove with JPEG/PNG/WebP input, MIME signature verification, and up to four photos at **1 MB each**. Uploads are re-encoded as WebP with EXIF and other source metadata removed, then stored in MongoDB—not in the application’s ephemeral local filesystem.
 - Direct swap request state changes with actor/time history, private persistent chat, numbered negotiated-terms revisions confirmed by both participants, and a separate two-member completion confirmation.
-- Same-city opportunities are ranked first; different-city alternatives are labeled. Matching uses member-entered city text and a clearly explained value gap, not GPS, radius, or geographic distance.
+- Same-city opportunities are ranked first; different-city alternatives are labeled. Profile city input is Unicode-normalized and whitespace-collapsed; matching ignores case and repeated spaces, but does not resolve city aliases or use GPS, radius, coordinates, or geographic distance.
+- The public **Community** feed supports sustainable-fashion topics, member posts, comments, likes, reports, soft-deletion by the post author, and role-gated admin hide/restore controls. Community discussions are separate from private swap threads. Posts are text-only; they are member-written, unverified content.
 - After mutual terms confirmation, the two participants may enter private manual hand-off/shipment notes (service label, reference, preference, and self-reported status). No public tracking page, courier API, booking, label/rate, payment, or carrier-verified delivery exists; provider integration remains **Partial**.
 - First-party rolling 30-day active/engaged-member and swap-request acceptance analytics use documented counts and denominators. Event documents store member ID/action/timestamp only, use no third-party tracker, and expire after 35 days.
 - Administrator counts are record-based and demo entries are excluded. Completion requires both members' in-app confirmations and is not proof of a physical exchange or delivery. Admin overview omits participant-only shipment fields.
@@ -30,7 +31,7 @@ Use **Node.js 20.9 or newer** (the repository pins Node.js 22). MongoDB is requi
 
 ## Tests
 
-`npm test` launches a single-node MongoDB replica set and drives the Express API with HTTP integration tests. This **test-only** database is never used as a production persistence fallback. The tests cover direct page refreshes, registration/login/password hashing, CSRF and origin checks (including missing tokens), photo validation and EXIF removal, simultaneous attempts to accept overlapping swaps, same-/different-city matching, private messaging and shipment-note authorization, terms and completion gates, analytics, and administrator moderation.
+`npm test` launches a single-node MongoDB replica set and drives the Express API with HTTP integration tests. This **test-only** database is never used as a production persistence fallback. The tests cover direct page refreshes, registration/login/password hashing, CSRF and origin checks (including missing tokens), photo validation and EXIF removal, simultaneous attempts to accept overlapping swaps, normalized same-/different-city matching, community posting/commenting/likes/reporting and admin moderation, private messaging and shipment-note authorization, terms and completion gates, analytics, and administrator moderation.
 
 The app package intentionally has no hard-coded demo logins or admin password. There is no user self-service admin bootstrap endpoint.
 
@@ -43,6 +44,8 @@ Vercel detects the root [`index.js`](index.js) as the Express Function entry poi
 Vercel Functions cap each request and response body at **4.5 MB**. The app accepts up to four source photos at 1 MB each and converts valid JPEG/PNG/WebP uploads to metadata-free WebP before storage. JSON remains capped at 64 KB and URL-encoded bodies at 16 KB. Listings, photos, sessions, and short-lived rate-limit counters stay in MongoDB; counters use HMAC-keyed client identifiers rather than raw IPs. There is no production disk or in-memory persistence fallback.
 
 Run `npm run check` and `npm test` before publishing branch changes. See [`DEPLOYMENT-HANDOFF.md`](DEPLOYMENT-HANDOFF.md) for current deployment constraints and verification notes; keep updates within the existing noncommercial demo and do not add paid resources or a courier provider without separate authorization.
+
+The city-normalization and Community update builds on production commit `6e0e0988`; publication uses the existing `vercel-preparation` branch and leaves `main` unchanged. Confirm each release against the Vercel deployment SHA and public HTTP checks.
 
 ## Promote the first administrator securely
 

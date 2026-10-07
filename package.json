@@ -11,7 +11,7 @@
     "dev": "node --watch server/index.js",
     "test": "node --test --test-concurrency=1",
     "admin:promote": "node scripts/promote-admin.js",
-    "check": "node --check index.js && node --check server/app.js && node --check server/database.js && node --check server/rate-limit-store.js && node --check server/models.js && node --check public/app.js && node --check server/index.js && node --check tests/marketplace.test.js"
+    "check": "node --check index.js && node --check server/app.js && node --check server/city.js && node --check server/database.js && node --check server/rate-limit-store.js && node --check server/models.js && node --check public/app.js && node --check server/index.js && node --check tests/marketplace.test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

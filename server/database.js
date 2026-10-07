@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { User, Listing, Swap, Message, ActivityEvent, RateLimitCounter } = require('./models');
+const { User, Listing, Swap, Message, ActivityEvent, RateLimitCounter, CommunityPost, CommunityComment, CommunityReport } = require('./models');
 const { seedDemoListings } = require('./seed');
 
 let initializationPromise = null;
@@ -18,7 +18,7 @@ async function initializeDatabase() {
         autoIndex: false
       });
     }
-    await Promise.all([User.createIndexes(), Listing.createIndexes(), Swap.createIndexes(), Message.createIndexes(), ActivityEvent.createIndexes(), RateLimitCounter.createIndexes()]);
+    await Promise.all([User.createIndexes(), Listing.createIndexes(), Swap.createIndexes(), Message.createIndexes(), ActivityEvent.createIndexes(), RateLimitCounter.createIndexes(), CommunityPost.createIndexes(), CommunityComment.createIndexes(), CommunityReport.createIndexes()]);
     if (process.env.SEED_DEMOS === 'true') await seedDemoListings();
   })()
     .then(() => { initialized = true; })

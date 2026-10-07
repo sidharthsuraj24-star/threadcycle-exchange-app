@@ -127,10 +127,47 @@ const rateLimitCounterSchema = new Schema({
 rateLimitCounterSchema.index({ store: 1, key: 1 }, { unique: true });
 rateLimitCounterSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
+const COMMUNITY_CATEGORIES = ['Sustainable Fashion', 'Swap Tips', 'Clothing Care', 'Repair & Upcycling', 'Eco-Friendly Fashion', 'Fashion Tips', 'Swap Experience'];
+const communityPostSchema = new Schema({
+  author: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  title: { type: String, required: true, trim: true, maxlength: 110 },
+  body: { type: String, required: true, trim: true, maxlength: 3000 },
+  category: { type: String, required: true, enum: COMMUNITY_CATEGORIES },
+  status: { type: String, enum: ['published', 'hidden', 'deleted'], default: 'published', index: true },
+  likes: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+  createdAt: { type: Date, required: true, default: Date.now },
+  updatedAt: { type: Date, required: true, default: Date.now }
+}, { versionKey: false });
+communityPostSchema.index({ status: 1, createdAt: -1 });
+
+const communityCommentSchema = new Schema({
+  post: { type: Schema.Types.ObjectId, ref: 'CommunityPost', required: true },
+  author: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  body: { type: String, required: true, trim: true, maxlength: 1200 },
+  status: { type: String, enum: ['visible', 'hidden'], default: 'visible' },
+  createdAt: { type: Date, required: true, default: Date.now }
+}, { versionKey: false });
+communityCommentSchema.index({ post: 1, status: 1, createdAt: 1 });
+
+const communityReportSchema = new Schema({
+  post: { type: Schema.Types.ObjectId, ref: 'CommunityPost', required: true },
+  reporter: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  reason: { type: String, required: true, trim: true, maxlength: 500 },
+  status: { type: String, enum: ['open', 'resolved', 'dismissed'], default: 'open', index: true },
+  reviewedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  reviewedAt: { type: Date, default: null },
+  createdAt: { type: Date, required: true, default: Date.now }
+}, { versionKey: false });
+communityReportSchema.index({ status: 1, createdAt: 1 });
+communityReportSchema.index({ post: 1, reporter: 1, status: 1 });
+
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 const Listing = mongoose.models.Listing || mongoose.model('Listing', listingSchema);
 const Swap = mongoose.models.Swap || mongoose.model('Swap', swapSchema);
 const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
 const ActivityEvent = mongoose.models.ActivityEvent || mongoose.model('ActivityEvent', activityEventSchema);
 const RateLimitCounter = mongoose.models.RateLimitCounter || mongoose.model('RateLimitCounter', rateLimitCounterSchema);
-module.exports = { User, Listing, Swap, Message, ActivityEvent, RateLimitCounter };
+const CommunityPost = mongoose.models.CommunityPost || mongoose.model('CommunityPost', communityPostSchema);
+const CommunityComment = mongoose.models.CommunityComment || mongoose.model('CommunityComment', communityCommentSchema);
+const CommunityReport = mongoose.models.CommunityReport || mongoose.model('CommunityReport', communityReportSchema);
+module.exports = { User, Listing, Swap, Message, ActivityEvent, RateLimitCounter, CommunityPost, CommunityComment, CommunityReport, COMMUNITY_CATEGORIES };

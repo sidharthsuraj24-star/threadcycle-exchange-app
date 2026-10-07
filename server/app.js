@@ -9,10 +9,11 @@ const mongoose = require('mongoose');
 const sharp = require('sharp');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { User, Listing, Swap, Message, ActivityEvent } = require('./models');
+const { User, Listing, Swap, Message, ActivityEvent, CommunityPost, CommunityComment, CommunityReport, COMMUNITY_CATEGORIES } = require('./models');
 const { initializeDatabase } = require('./database');
 const { MongoRateLimitStore } = require('./rate-limit-store');
 const { estimateValue, CATEGORIES, CONDITIONS, BRANDS } = require('./value');
+const { normalizeCity, cityMatchKey, cityPattern } = require('./city');
 
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
@@ -64,6 +65,11 @@ const safeText = (value, max, field) => {
   if (!clean || clean.length > max) throw new HttpError(400, `${field} must be between 1 and ${max} characters.`);
   return clean;
 };
+const cityText = (value) => {
+  const city = normalizeCity(safeText(value, 60, 'City'));
+  if (!city || city.length > 60) throw new HttpError(400, 'City must be between 1 and 60 characters.');
+  return city;
+};
 const optionalText = (value, max) => typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim().slice(0, max) : '';
 const enumValue = (value, allowed, field) => { if (!allowed.includes(value)) throw new HttpError(400, `Choose a valid ${field}.`); return value; };
 const parseId = (value, field = 'ID') => { if (!mongoose.isValidObjectId(value)) throw new HttpError(404, `${field} not found.`); return value; };
@@ -76,6 +82,33 @@ const listingView = (item, owner) => ({
   imageUrls: item.isDemo ? [`/images/demo-${item.demoImageNo}.webp`] : Array.from({ length: item.imageCount || 0 }, (_, index) => `/api/listings/${item._id}/images/${index}`),
   createdAt: item.createdAt
 });
+async function communityPostViews(posts, viewerId = null) {
+  if (!posts.length) return [];
+  const postIds = posts.map((post) => post._id);
+  const counts = await CommunityComment.aggregate([
+    { $match: { post: { $in: postIds }, status: 'visible' } },
+    { $group: { _id: '$post', count: { $sum: 1 } } }
+  ]);
+  const countByPost = new Map(counts.map((entry) => [String(entry._id), entry.count]));
+  const comments = await CommunityComment.find({ post: { $in: postIds }, status: 'visible' })
+    .sort({ createdAt: -1 }).limit(300).populate('author', 'name');
+  const byPost = new Map();
+  for (const comment of comments) {
+    const postId = String(comment.post);
+    if (!byPost.has(postId)) byPost.set(postId, []);
+    byPost.get(postId).push({ id: String(comment._id), body: comment.body, author: { id: String(comment.author._id), name: comment.author.name }, createdAt: comment.createdAt });
+  }
+  return posts.map((post) => {
+    const postComments = byPost.get(String(post._id)) || [];
+    const likes = post.likes || [];
+    return {
+      id: String(post._id), title: post.title, body: post.body, category: post.category,
+      author: { id: String(post.author._id), name: post.author.name }, createdAt: post.createdAt,
+      likeCount: likes.length, likedByMe: Boolean(viewerId && likes.some((id) => String(id) === String(viewerId))),
+      commentCount: countByPost.get(String(post._id)) || 0, comments: postComments.slice(0, 10).reverse()
+    };
+  });
+}
 const csrfMatches = (req) => {
   const expected = req.session?.csrfToken;
   if (typeof expected !== 'string' || expected.length === 0) return false;
@@ -189,7 +222,7 @@ const listingFilterFromBody = (body, city) => ({
   title: safeText(body.title, 90, 'Title'), category: enumValue(body.category, Object.keys(CATEGORIES), 'category'),
   size: safeText(body.size, 24, 'Size'), brand: safeText(body.brand, 60, 'Brand'), brandTier: enumValue(body.brandTier, Object.keys(BRANDS), 'brand tier'),
   condition: enumValue(body.condition, Object.keys(CONDITIONS), 'condition'),
-  description: safeText(body.description, 800, 'Description'), city: safeText(city || body.city, 60, 'City'),
+  description: safeText(body.description, 800, 'Description'), city: cityText(city || body.city),
   comparableRetailPrice: optionalComparableRetailPrice(body.comparableRetailPrice),
   estimatedValue: estimateValue({ category: body.category, condition: body.condition, brandTier: body.brandTier })
 });
@@ -215,7 +248,7 @@ app.post('/api/register', authLimiter, requireCsrf, async (req, res) => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address.');
     const password = req.body.password;
     if (typeof password !== 'string' || Buffer.byteLength(password) < 12 || Buffer.byteLength(password) > 72) throw new HttpError(400, 'Password must be 12–72 bytes long.');
-    const city = safeText(req.body.city, 60, 'City');
+    const city = cityText(req.body.city);
     if (await User.exists({ email })) throw new HttpError(409, 'An account already exists for that email.');
     const user = await User.create({ name, email, passwordHash: await bcrypt.hash(password, 12), city });
     await logIn(req, user);
@@ -260,7 +293,10 @@ app.get('/api/listings', async (req, res) => {
     const query = { status: 'available' };
     if (req.query.category) query.category = enumValue(req.query.category, Object.keys(CATEGORIES), 'category');
     if (req.query.size) query.size = new RegExp(`^${String(req.query.size).slice(0, 24).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
-    if (req.query.city) query.city = new RegExp(`^${String(req.query.city).slice(0, 60).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    if (req.query.city) {
+      const filterCity = cityPattern(String(req.query.city).slice(0, 60));
+      if (filterCity) query.city = filterCity;
+    }
     if (req.query.q) { const text = String(req.query.q).slice(0, 60).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); query.$or = [{ title: new RegExp(text, 'i') }, { brand: new RegExp(text, 'i') }, { description: new RegExp(text, 'i') }]; }
     const page = Math.max(1, Math.min(50, Number(req.query.page) || 1));
     const [items, count] = await Promise.all([
@@ -323,22 +359,130 @@ app.delete('/api/listings/:id', requireUser, requireCsrf, async (req, res) => {
 
 app.get('/api/matches', requireUser, async (req, res) => {
   try {
-    const city = optionalText(req.query.city || req.user.city, 60);
+    const city = normalizeCity(optionalText(req.query.city || req.user.city, 60));
     const own = await Listing.find({ owner: req.user._id, status: 'available' }).select('estimatedValue').lean();
     const targetValues = own.map((i) => i.estimatedValue);
     const baseQuery = { owner: { $ne: req.user._id }, status: 'available', isDemo: false };
-    const cityPattern = city ? new RegExp(`^${city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') : null;
+    const cityRegex = cityPattern(city);
     const [sameCityListings, otherListings] = await Promise.all([
-      Listing.find(cityPattern ? { ...baseQuery, city: cityPattern } : baseQuery).select('-images').sort({ createdAt: -1 }).limit(100).populate('owner', 'name city isDemo demoLabel'),
-      cityPattern ? Listing.find({ ...baseQuery, $nor: [{ city: cityPattern }] }).select('-images').sort({ createdAt: -1 }).limit(100).populate('owner', 'name city isDemo demoLabel') : []
+      Listing.find(cityRegex ? { ...baseQuery, city: cityRegex } : baseQuery).select('-images').sort({ createdAt: -1 }).limit(100).populate('owner', 'name city isDemo demoLabel'),
+      cityRegex ? Listing.find({ ...baseQuery, $nor: [{ city: cityRegex }] }).select('-images').sort({ createdAt: -1 }).limit(100).populate('owner', 'name city isDemo demoLabel') : []
     ]);
-    const listings = cityPattern ? [...sameCityListings, ...otherListings] : sameCityListings;
+    const listings = cityRegex ? [...sameCityListings, ...otherListings] : sameCityListings;
     const matches = listings.map((i) => {
       const gap = targetValues.length ? Math.min(...targetValues.map((v) => Math.abs(v - i.estimatedValue) / Math.max(v, i.estimatedValue, 1))) : 1;
-      const sameCity = city && i.city.toLocaleLowerCase() === city.toLocaleLowerCase();
+      const sameCity = city && cityMatchKey(i.city) === cityMatchKey(city);
       return { item: listingView(i), sameCity: Boolean(sameCity), valueGap: Math.round(gap * 100), matchScore: Math.max(0, Math.round((sameCity ? 60 : 0) + (1 - Math.min(gap, 1)) * 40)) };
     }).sort((a, b) => b.matchScore - a.matchScore || b.item.createdAt - a.item.createdAt).slice(0, 24);
-    res.json({ items: matches, cityMatched: Boolean(city), locationMethod: 'Exact city-level matching from member-entered city names; not geospatial, distance, radius, GPS, or street-address matching.' });
+    res.json({ items: matches, cityMatched: Boolean(city), locationMethod: 'Normalized city-level matching from member-entered city names (case and spacing insensitive); not geospatial, distance, radius, GPS, or street-address matching.' });
+  } catch (e) { sendError(res, e); }
+});
+
+app.get('/api/community/posts', async (req, res) => {
+  try {
+    const filter = { status: 'published' };
+    if (req.query.category) filter.category = enumValue(req.query.category, COMMUNITY_CATEGORIES, 'community category');
+    const page = Math.max(1, Math.min(500, Number.parseInt(req.query.page, 10) || 1));
+    const [posts, total] = await Promise.all([
+      CommunityPost.find(filter).sort({ createdAt: -1 }).skip((page - 1) * 20).limit(20).populate('author', 'name'),
+      CommunityPost.countDocuments(filter)
+    ]);
+    res.json({ posts: await communityPostViews(posts, req.session.userId || null), total, page, pageCount: Math.min(500, Math.max(1, Math.ceil(total / 20))) });
+  } catch (e) { sendError(res, e); }
+});
+app.post('/api/community/posts', requireUser, requireCsrf, async (req, res) => {
+  try {
+    const post = await CommunityPost.create({
+      author: req.user._id, title: safeText(req.body.title, 110, 'Post title'), body: safeText(req.body.body, 3000, 'Post'),
+      category: enumValue(req.body.category, COMMUNITY_CATEGORIES, 'community category')
+    });
+    const populated = await CommunityPost.findById(post._id).populate('author', 'name');
+    res.status(201).json({ post: (await communityPostViews([populated], req.user._id))[0] });
+  } catch (e) { sendError(res, e); }
+});
+app.get('/api/community/posts/:id', async (req, res) => {
+  try {
+    const post = await CommunityPost.findOne({ _id: parseId(req.params.id, 'Post'), status: 'published' }).populate('author', 'name');
+    if (!post) throw new HttpError(404, 'Community post not found.');
+    res.json({ post: (await communityPostViews([post], req.session.userId || null))[0] });
+  } catch (e) { sendError(res, e); }
+});
+app.post('/api/community/posts/:id/like', requireUser, requireCsrf, async (req, res) => {
+  try {
+    const post = await CommunityPost.findOne({ _id: parseId(req.params.id, 'Post'), status: 'published' }).select('likes');
+    if (!post) throw new HttpError(404, 'Community post not found.');
+    const liked = post.likes.some((id) => String(id) === String(req.user._id));
+    const result = await CommunityPost.updateOne({ _id: post._id, status: 'published' }, liked ? { $pull: { likes: req.user._id } } : { $addToSet: { likes: req.user._id } });
+    if (!result.matchedCount) throw new HttpError(404, 'Community post not found.');
+    const updated = await CommunityPost.findById(post._id).select('likes');
+    res.json({ liked: !liked, likeCount: updated.likes.length });
+  } catch (e) { sendError(res, e); }
+});
+app.post('/api/community/posts/:id/comments', requireUser, requireCsrf, async (req, res) => {
+  try {
+    const post = await CommunityPost.findOne({ _id: parseId(req.params.id, 'Post'), status: 'published' }).select('_id');
+    if (!post) throw new HttpError(404, 'Community post not found.');
+    const comment = await CommunityComment.create({ post: post._id, author: req.user._id, body: safeText(req.body.body, 1200, 'Comment') });
+    res.status(201).json({ comment: { id: String(comment._id), body: comment.body, author: { id: String(req.user._id), name: req.user.name }, createdAt: comment.createdAt } });
+  } catch (e) { sendError(res, e); }
+});
+app.post('/api/community/posts/:id/reports', requireUser, requireCsrf, async (req, res) => {
+  try {
+    const post = await CommunityPost.findOne({ _id: parseId(req.params.id, 'Post'), status: 'published' }).select('author');
+    if (!post) throw new HttpError(404, 'Community post not found.');
+    if (String(post.author) === String(req.user._id)) throw new HttpError(403, 'You cannot report your own post.');
+    const reason = safeText(req.body.reason, 500, 'Report reason');
+    if (await CommunityReport.exists({ post: post._id, reporter: req.user._id, status: 'open' })) throw new HttpError(409, 'You already have an open report for this post.');
+    const report = await CommunityReport.create({ post: post._id, reporter: req.user._id, reason });
+    res.status(201).json({ report: { id: String(report._id), status: report.status } });
+  } catch (e) { sendError(res, e); }
+});
+app.delete('/api/community/posts/:id', requireUser, requireCsrf, async (req, res) => {
+  try {
+    const post = await CommunityPost.findById(parseId(req.params.id, 'Post'));
+    if (!post || String(post.author) !== String(req.user._id)) throw new HttpError(404, 'Community post not found.');
+    if (post.status === 'deleted') throw new HttpError(404, 'Community post not found.');
+    post.status = 'deleted'; post.updatedAt = new Date(); await post.save();
+    res.json({ ok: true });
+  } catch (e) { sendError(res, e); }
+});
+app.get('/api/admin/community/reports', requireUser, requireAdmin, async (_req, res) => {
+  try {
+    const reports = await CommunityReport.find({ status: 'open' }).sort({ createdAt: 1 }).limit(100)
+      .populate('reporter', 'name')
+      .populate({ path: 'post', select: 'title body category status author createdAt', populate: { path: 'author', select: 'name' } });
+    res.json({ reports: reports.map((report) => ({
+      id: String(report._id), reason: report.reason, createdAt: report.createdAt,
+      reporter: report.reporter ? { id: String(report.reporter._id), name: report.reporter.name } : null,
+      post: report.post ? { id: String(report.post._id), title: report.post.title, body: report.post.body, category: report.post.category, status: report.post.status, author: report.post.author ? { id: String(report.post.author._id), name: report.post.author.name } : null } : null
+    })) });
+  } catch (e) { sendError(res, e); }
+});
+app.get('/api/admin/community/posts', requireUser, requireAdmin, async (req, res) => {
+  try {
+    const filter = { status: 'hidden' };
+    const posts = await CommunityPost.find(filter).sort({ updatedAt: -1 }).limit(50).populate('author', 'name');
+    res.json({ posts: posts.map((post) => ({ id: String(post._id), title: post.title, category: post.category, author: { id: String(post.author._id), name: post.author.name }, updatedAt: post.updatedAt })) });
+  } catch (e) { sendError(res, e); }
+});
+app.patch('/api/admin/community/reports/:id', requireUser, requireAdmin, requireCsrf, async (req, res) => {
+  try {
+    const report = await CommunityReport.findById(parseId(req.params.id, 'Report'));
+    if (!report || report.status !== 'open') throw new HttpError(404, 'Open community report not found.');
+    const status = enumValue(req.body.status, ['resolved', 'dismissed'], 'report outcome');
+    if (req.body.hidePost !== undefined && typeof req.body.hidePost !== 'boolean') throw new HttpError(400, 'Choose whether to hide the reported post.');
+    if (req.body.hidePost) await CommunityPost.updateOne({ _id: report.post, status: { $ne: 'deleted' } }, { $set: { status: 'hidden', updatedAt: new Date() } });
+    report.status = status; report.reviewedBy = req.user._id; report.reviewedAt = new Date(); await report.save();
+    res.json({ ok: true, status: report.status });
+  } catch (e) { sendError(res, e); }
+});
+app.patch('/api/admin/community/posts/:id', requireUser, requireAdmin, requireCsrf, async (req, res) => {
+  try {
+    if (typeof req.body.hidden !== 'boolean') throw new HttpError(400, 'Choose whether the post should be hidden.');
+    const post = await CommunityPost.findById(parseId(req.params.id, 'Post'));
+    if (!post || post.status === 'deleted') throw new HttpError(404, 'Community post not found.');
+    post.status = req.body.hidden ? 'hidden' : 'published'; post.updatedAt = new Date(); await post.save();
+    res.json({ ok: true, status: post.status });
   } catch (e) { sendError(res, e); }
 });
 
@@ -511,7 +655,7 @@ app.get('/api/profile', requireUser, async (req, res) => res.json({ profile: use
 app.patch('/api/profile', requireUser, requireCsrf, async (req, res) => {
   try {
     req.user.name = safeText(req.body.name, 48, 'Name');
-    req.user.city = safeText(req.body.city, 60, 'City');
+    req.user.city = cityText(req.body.city);
     req.user.bio = optionalText(req.body.bio, 300);
     await req.user.save();
     await recordActivity(req.user._id, 'profile_updated');

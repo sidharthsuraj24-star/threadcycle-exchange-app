@@ -2,6 +2,8 @@
 
 The noncommercial student demo is live at the [production site](https://threadcycle-exchange-app.vercel.app/). It uses the private GitHub repository `sidharthsuraj24-star/threadcycle-exchange-app` on branch `vercel-preparation`; `main` is not the deployment branch. Keep the repository and project private, and do not enable paid resources.
 
+The city-normalization and Community update is scoped to the existing `vercel-preparation` branch, based on production commit `6e0e0988`. Keep `main` unchanged and do not change Vercel settings; verify each release against Vercel's deployed SHA and public HTTP routes. Courier integration remains deferred.
+
 ## Runtime and routing
 
 Vercel detects the root `index.js` and runs the Express app as a Function. Vercel serves `public/` assets from its CDN; Express skips local static-file serving in Vercel, but now serves `public/index.html` for non-API GET routes so client-side pages work on direct load and refresh. Requests to `/api` and `/api/*` are not rewritten to the app shell. `vercel.json` continues to provide security headers for the CDN-served HTML, while Express API responses retain Helmet.

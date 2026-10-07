@@ -2,9 +2,11 @@ const appRoot = document.getElementById('app');
 let currentUser = null;
 let csrfToken = '';
 let toastTimer;
+let adminCommunityMarkup = '';
 const categories = ['Tops', 'Outerwear', 'Dresses', 'Bottoms', 'Shoes', 'Accessories', 'Bundle'];
 const conditions = ['New with tags', 'Excellent', 'Good', 'Well loved'];
 const tiers = ['Everyday', 'Premium', 'Designer', 'Unbranded'];
+const communityCategories = ['Sustainable Fashion', 'Swap Tips', 'Clothing Care', 'Repair & Upcycling', 'Eco-Friendly Fashion', 'Fashion Tips', 'Swap Experience'];
 const escapeHTML = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const money = (value) => `₹${Number(value || 0).toLocaleString('en-IN')}`;
 const shortDate = (value) => value ? new Date(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
@@ -52,13 +54,19 @@ function header(path) {
   const link = (href, text, active) => `<a href="${href}" data-link class="${active ? 'active' : ''}">${text}</a>`;
   const matchesView = routeInfo().query.get('view') === 'matches';
   return `<header class="site-header"><div class="header-inner">${logo()}<nav class="main-nav" id="main-nav" aria-label="Main navigation">
-    ${link('/', 'Discover', (path === '/' && !matchesView) || path.startsWith('/listings'))}${link('/?view=matches', 'City matches', path === '/matches' || matchesView)}${currentUser ? link('/messages', 'Messages', path.startsWith('/messages')) : ''}${currentUser ? link('/dashboard', 'My wardrobe', path === '/dashboard' || path === '/profile') : ''}${currentUser?.role === 'admin' ? link('/admin', 'Admin', path === '/admin') : ''}
+    ${link('/', 'Discover', (path === '/' && !matchesView) || path.startsWith('/listings'))}${link('/?view=matches', 'City matches', path === '/matches' || matchesView)}${link('/community', 'Community', path === '/community')}${currentUser ? link('/messages', 'Messages', path.startsWith('/messages')) : ''}${currentUser ? link('/dashboard', 'My wardrobe', path === '/dashboard' || path === '/profile') : ''}${currentUser?.role === 'admin' ? link('/admin', 'Admin', path === '/admin') : ''}
     </nav><div class="header-actions">${currentUser ? `<span class="user-pill">${escapeHTML(currentUser.name)}</span><button class="icon-button" data-action="logout" aria-label="Sign out" title="Sign out">↗</button>` : `<a class="button button-outline button-small" href="/login" data-link>Sign in</a>`}<button class="icon-button menu-toggle" data-action="menu" aria-label="Toggle menu" aria-expanded="false">☰</button></div></div></header>`;
 }
 function footer() {
   return `<footer><div class="footer-inner"><div>${logo()}<p>Clothes find their next chapter through direct, one-for-one exchanges. No payments, courier booking, or carrier integration.</p></div><p>DEMO NOTICE · Cards labeled illustrative are sample content only, not real member offers. Other listings and photos come from registered members. Cities are member-entered; no real-world swaps or impact claims are implied.</p></div></footer>`;
 }
-function layout(content, path) { appRoot.innerHTML = `${header(path)}<main id="main-content">${content}</main>${footer()}`; }
+function layout(content, path) {
+  appRoot.innerHTML = `${header(path)}<main id="main-content">${content}</main>${footer()}`;
+  if (path === '/admin' && adminCommunityMarkup) {
+    document.querySelector('.stat-grid')?.insertAdjacentHTML('afterend', adminCommunityMarkup);
+    adminCommunityMarkup = '';
+  }
+}
 function demoBadge(isDemo) { return isDemo ? '<span class="badge badge-demo">Illustrative demo</span>' : ''; }
 function statusBadge(status, agreementConfirmed = null) {
   const acceptedLabel = agreementConfirmed === true ? 'Accepted · terms agreed' : agreementConfirmed === false ? 'Accepted · terms pending' : 'Accepted';
@@ -95,6 +103,26 @@ async function renderMatches(embedded = false) {
   const data = await api(`/api/matches?city=${encodeURIComponent(currentUser.city || '')}`);
   const cards = data.items.map((match) => listingCard(match.item, match)).join('');
   layout(`<div class="container">${pageHead('City & value guide', 'Good fits, not magic matches', 'Same-city member listings appear first; remaining offers are alternatives sorted by indicative value gap.')}${disclaimer('Matching is exact city-level text entered by members—not geospatial, distance, radius, GPS, or street-address matching. No courier booking is provided.')}<section class="section"><div class="split-head"><div><div class="eyebrow">Your entered city · ${escapeHTML(currentUser.city || 'not set')}</div><h2 style="font:500 30px var(--serif);margin:9px 0">Same-city opportunities</h2></div><a href="/dashboard?tab=profile#profile" data-link class="text-link">Edit my city</a></div><div class="note-box">Same-city is a broad city-name match only, not nearby or geospatial distance. “Other city · value fit” cards are listed as cross-city alternatives. Estimate differences do not measure garment quality, guarantee a fair exchange, or price clothes for sale.</div><div class="listing-grid">${cards || `<div class="empty-state no-results"><strong>No member listings to match yet</strong>When you list a piece, same-city and other-city offers from real members may appear here. Sample demo cards are intentionally not shown as real match opportunities.</div>`}</div></section></div>`, embedded ? '/' : '/matches');
+}
+function communityPostCard(post) {
+  const comments = post.comments.map((comment) => `<li><b>${escapeHTML(comment.author.name)}</b><p>${escapeHTML(comment.body)}</p><small>${shortTime(comment.createdAt)}</small></li>`).join('');
+  const likeControl = currentUser
+    ? `<button class="button button-outline button-small" data-action="community-like" data-id="${escapeHTML(post.id)}" aria-pressed="${post.likedByMe}">${post.likedByMe ? 'Liked' : 'Like'} · ${Number(post.likeCount)}</button>`
+    : `<a class="button button-outline button-small" href="/login?next=%2Fcommunity" data-link>Sign in to like · ${Number(post.likeCount)}</a>`;
+  const reportControl = currentUser && post.author.id !== currentUser.id ? `<button class="inline-button" data-action="community-report" data-id="${escapeHTML(post.id)}">Report</button>` : '';
+  const deleteControl = currentUser && post.author.id === currentUser.id ? `<button class="inline-button" data-action="community-delete" data-id="${escapeHTML(post.id)}">Delete your post</button>` : '';
+  const commentForm = currentUser ? `<form class="community-comment-form" data-form="community-comment" data-id="${escapeHTML(post.id)}"><label class="sr-only" for="comment-${escapeHTML(post.id)}">Add a comment</label><input class="input" id="comment-${escapeHTML(post.id)}" name="body" maxlength="1200" required placeholder="Add a thoughtful comment…"><button class="button button-small" type="submit">Comment</button></form>` : `<p class="field-help"><a class="text-link" href="/login?next=%2Fcommunity" data-link>Sign in</a> to join the discussion.</p>`;
+  return `<article class="panel community-post"><div class="community-post-meta"><span class="badge">${escapeHTML(post.category)}</span><small>${escapeHTML(post.author.name)} · ${shortTime(post.createdAt)}</small></div><h2>${escapeHTML(post.title)}</h2><p class="community-post-body">${escapeHTML(post.body)}</p><div class="community-post-actions">${likeControl}${reportControl}${deleteControl}</div><section class="community-comments"><h3>Conversation · ${Number(post.commentCount)}</h3>${comments ? `<ul>${comments}</ul>` : '<p class="field-help">No comments yet. Share a useful idea or question.</p>'}${commentForm}</section></article>`;
+}
+async function renderCommunity(query = new URLSearchParams()) {
+  const category = query.get('category') || '';
+  const params = new URLSearchParams(); if (category) params.set('category', category); if (query.get('page')) params.set('page', query.get('page'));
+  const data = await api(`/api/community/posts${params.size ? `?${params}` : ''}`);
+  const categoryLinks = [`<a class="category-chip${category ? '' : ' active'}" data-link href="/community">All topics</a>`, ...communityCategories.map((name) => `<a class="category-chip${category === name ? ' active' : ''}" data-link href="/community?category=${encodeURIComponent(name)}">${escapeHTML(name)}</a>`)].join('');
+  const composer = currentUser ? `<form class="form-card community-compose" data-form="community-post"><div class="eyebrow">Share with the community</div><h2>Start a conversation</h2><div class="form-grid"><div class="field full"><label for="community-title">Title</label><input id="community-title" name="title" class="input" maxlength="110" required placeholder="A question, tip, or small repair win"></div><div class="field"><label for="community-category">Topic</label><select id="community-category" class="select" name="category" required>${communityCategories.map((name) => `<option>${escapeHTML(name)}</option>`).join('')}</select></div><div class="field full"><label for="community-body">Post</label><textarea id="community-body" name="body" class="textarea" maxlength="3000" required placeholder="Share practical, kind, sustainability-focused advice…"></textarea><p class="field-help">Please avoid sharing private contact details or exact addresses. Posts can be reported to moderators.</p></div></div><button class="button" type="submit">Publish post</button></form>` : `<div class="note-box community-join"><strong>Join the conversation</strong><p>Browse community ideas freely; sign in to post, like, or comment.</p><a class="button button-small" href="/register?next=%2Fcommunity" data-link>Create an account</a></div>`;
+  const posts = data.posts.map(communityPostCard).join('');
+  const pagination = data.pageCount > 1 ? `<nav class="community-pagination" aria-label="Community pages">${data.page > 1 ? `<a class="button button-outline button-small" data-link href="/community?${new URLSearchParams({ ...(category ? { category } : {}), page: String(data.page - 1) })}">Newer posts</a>` : ''}<span>Page ${Number(data.page)} of ${Number(data.pageCount)}</span>${data.page < data.pageCount ? `<a class="button button-outline button-small" data-link href="/community?${new URLSearchParams({ ...(category ? { category } : {}), page: String(data.page + 1) })}">Older posts</a>` : ''}</nav>` : '';
+  layout(`<div class="container">${pageHead('A shared space', 'Good clothes, better ideas', 'A community for practical sustainable-fashion questions, care, repair, and swap stories—separate from private swap conversations.')}${disclaimer('Community posts and comments are member-written, not verified advice. Keep personal contact details private and report content that needs moderator review.')}<section class="section"><nav class="category-chips community-topics" aria-label="Community topics">${categoryLinks}</nav>${composer}<div class="community-feed">${posts || '<div class="empty-state"><strong>No posts in this topic yet</strong>Start a useful conversation for the community.</div>'}</div>${pagination}</section></div>`, '/community');
 }
 async function renderAuth(mode = 'login', next = '/') {
   const registering = mode === 'register';
@@ -228,7 +256,9 @@ async function renderThread(id) {
 async function renderAdmin() {
   if (!currentUser) { renderAuth('login', '/admin'); return; }
   if (currentUser.role !== 'admin') throw new Error('Administrator access only. The first administrator is promoted by an authorized owner from a trusted terminal; no self-sign-up exists.');
-  const data = await api('/api/admin/overview');
+  const [data, reportData, hiddenPostData] = await Promise.all([
+    api('/api/admin/overview'), api('/api/admin/community/reports'), api('/api/admin/community/posts?status=hidden')
+  ]);
   const kpis = [['Registered members', data.kpis.registeredMembers], ['Available member listings', data.kpis.availableMemberListings], ['Swap requests', data.kpis.swapRequests], ['Accepted', data.kpis.acceptedSwaps], ['Member-confirmed completions', data.kpis.memberConfirmedCompletions], ['Open disputes', data.kpis.disputesOpen]].map(([label, value]) => `<div class="stat-card"><b>${Number(value).toLocaleString()}</b><span>${escapeHTML(label)}</span></div>`).join('');
   const activity = data.kpis.activity30d;
   const activityKpis = [
@@ -240,6 +270,9 @@ async function renderAdmin() {
   const users = data.users.map((u) => `<tr><td><strong>${escapeHTML(u.name)}</strong><br><small>${escapeHTML(u.email || '')}</small></td><td>${escapeHTML(u.city)}</td><td>${escapeHTML(u.role)}</td><td>${u.suspended ? 'Suspended' : 'Active'}</td><td>${u.role === 'admin' ? '—' : `<button class="button ${u.suspended ? 'button-outline' : 'button-danger'} button-small" data-action="admin-user" data-id="${escapeHTML(u.id)}" data-suspend="${!u.suspended}">${u.suspended ? 'Restore' : 'Suspend'}</button>`}</td></tr>`).join('');
   const listings = data.listings.map((item) => `<tr><td>${itemMini(item)}</td><td>${escapeHTML(item.city)}</td><td>${escapeHTML(item.status)}</td><td>${item.status === 'hidden' ? `<button class="button button-outline button-small" data-action="admin-listing" data-id="${escapeHTML(item.id)}" data-hidden="false">Restore</button>` : `<button class="button button-danger button-small" data-action="admin-listing" data-id="${escapeHTML(item.id)}" data-hidden="true">Hide</button>`}</td></tr>`).join('');
   const swaps = data.swaps.map((s) => `<div class="swap-card">${swapPair(s)}<div class="swap-info"><span>${statusBadge(s.status)}</span><span>${escapeHTML(s.requester?.name)} ↔ ${escapeHTML(s.recipient?.name)}</span></div>${s.adminNote ? `<p class="field-help">Admin note: ${escapeHTML(s.adminNote)}</p>` : ''}${s.status === 'disputed' ? `<div class="swap-actions"><button class="button button-danger button-small" data-action="admin-resolve" data-id="${escapeHTML(s.id)}">Close dispute · restore items</button><a class="button button-outline button-small" href="/messages/${encodeURIComponent(s.id)}" data-link>Review conversation</a></div>` : ''}</div>`).join('');
+  const reportCards = reportData.reports.map((report) => `<article class="community-report"><div><span class="badge">${escapeHTML(report.post?.category || 'Post unavailable')}</span><small>Reported by ${escapeHTML(report.reporter?.name || 'member')} · ${shortTime(report.createdAt)}</small></div><h3>${escapeHTML(report.post?.title || 'Post unavailable')}</h3>${report.post ? `<p class="community-post-body">${escapeHTML(report.post.body)}</p><p class="field-help">By ${escapeHTML(report.post.author?.name || 'member')} · ${escapeHTML(report.post.status)}</p>` : ''}<blockquote>${escapeHTML(report.reason)}</blockquote><div class="button-row"><button class="button button-danger button-small" data-action="admin-community-report" data-id="${escapeHTML(report.id)}" data-status="resolved" data-hide="true">Hide post & resolve</button><button class="button button-outline button-small" data-action="admin-community-report" data-id="${escapeHTML(report.id)}" data-status="dismissed" data-hide="false">Dismiss report</button></div></article>`).join('');
+  const hiddenCommunityPosts = hiddenPostData.posts.map((post) => `<div class="community-hidden-row"><span><b>${escapeHTML(post.title)}</b><small>${escapeHTML(post.category)} · ${escapeHTML(post.author.name)} · hidden</small></span><button class="button button-outline button-small" data-action="admin-community-post" data-id="${escapeHTML(post.id)}" data-hidden="false">Restore</button></div>`).join('');
+  adminCommunityMarkup = `<section class="panel full community-admin"><div class="panel-head"><h2>Community moderation</h2><small>${Number(reportData.reports.length)} open report${reportData.reports.length === 1 ? '' : 's'}</small></div>${reportCards || '<p class="field-help">No open post reports.</p>'}<div class="community-hidden"><h3>Hidden community posts</h3>${hiddenCommunityPosts || '<p class="field-help">No hidden posts.</p>'}</div></section>`;
   layout(`<div class="container">${pageHead('Private moderation', 'Marketplace overview', 'Moderation and database counts only. A swap is counted complete only after both members confirm; illustrative seed entries are excluded.')}${disclaimer(data.note)}<section class="section"><div class="stat-grid">${kpis}</div><section class="panel full"><div class="panel-head"><h2>Member activity · rolling 30 days</h2><small>${shortDate(activity.startsAt)}–${shortDate(activity.endsAt)}</small></div><div class="stat-grid">${activityKpis}</div><p class="field-help">Active = at least one successful tracked member action; engaged = at least two tracked actions. Engagement rate = ${activity.engagedMemberCount} engaged eligible members / ${activity.eligibleMemberCount} currently registered, non-demo, non-suspended eligible members. Requests accepted = ${activity.requestsAccepted} requests created during this same window with a recorded acceptance / ${activity.requestsCreated} total requests created during the window. Rates are unavailable when the denominator is zero. Activity events contain member ID, action type, and timestamp only; they exclude profile/contact content and are retained for at most 35 days.</p></section><div class="note-box">These are in-app activity and request outcomes only—not environmental savings, real-world adoption, physical exchanges, delivery outcomes, or verified user behavior.</div><div class="dashboard-grid"><section class="panel full"><div class="panel-head"><h2>Members</h2><small>Newest 30</small></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Member</th><th>City</th><th>Role</th><th>Status</th><th>Action</th></tr></thead><tbody>${users || '<tr><td colspan="5">No registered members yet.</td></tr>'}</tbody></table></div></section><section class="panel full"><div class="panel-head"><h2>Recent listings</h2><small>Hide or restore offers</small></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Piece</th><th>City</th><th>Status</th><th>Action</th></tr></thead><tbody>${listings || '<tr><td colspan="4">No listings.</td></tr>'}</tbody></table></div></section><section class="panel full"><div class="panel-head"><h2>Swap activity & disputes</h2><small>Newest 30</small></div>${swaps || '<div class="empty-state">No swap records yet. Counts remain zero until users create requests.</div>'}</section></div></section></div>`, '/admin');
 }
 function renderError(message) {
@@ -253,6 +286,7 @@ async function render() {
     else if (route.path === '/login') await renderAuth('login', route.query.get('next') || '/');
     else if (route.path === '/register') await renderAuth('register', route.query.get('next') || '/');
     else if (route.path === '/matches') await renderMatches(true);
+    else if (route.path === '/community') await renderCommunity(route.query);
     else if (route.path === '/dashboard') await renderDashboard(route.query);
     else if (route.path === '/profile') await renderDashboard(new URLSearchParams('tab=profile'));
     else if (route.path === '/messages') await renderMessages();
@@ -288,6 +322,14 @@ async function submitHandler(event) {
     if (type === 'profile') {
       const payload = Object.fromEntries(new FormData(form).entries()); const data = await api('/api/profile', { method: 'PATCH', body: payload });
       currentUser = data.user; toast('Profile saved.'); navigate('/dashboard?tab=profile#profile'); return;
+    }
+    if (type === 'community-post') {
+      await api('/api/community/posts', { method: 'POST', body: Object.fromEntries(new FormData(form).entries()) });
+      toast('Your community post is live.'); navigate('/community'); return;
+    }
+    if (type === 'community-comment') {
+      await api(`/api/community/posts/${encodeURIComponent(form.dataset.id)}/comments`, { method: 'POST', body: Object.fromEntries(new FormData(form).entries()) });
+      toast('Comment added.'); await renderCommunity(routeInfo().query); return;
     }
     if (type === 'agreement') {
       const payload = Object.fromEntries(new FormData(form).entries()); payload.action = 'propose';
@@ -330,6 +372,27 @@ async function clickHandler(event) {
     if (action === 'delete-listing') {
       if (!window.confirm('Remove this listing from the public wardrobe?')) return;
       await api(`/api/listings/${encodeURIComponent(button.dataset.id)}`, { method: 'DELETE', body: {} }); toast('Listing removed.'); await renderDashboard(routeInfo().query); return;
+    }
+    if (action === 'community-like') {
+      await api(`/api/community/posts/${encodeURIComponent(button.dataset.id)}/like`, { method: 'POST', body: {} }); await renderCommunity(routeInfo().query); return;
+    }
+    if (action === 'community-report') {
+      const reason = window.prompt('Briefly explain why this post should be reviewed.');
+      if (reason === null) return;
+      await api(`/api/community/posts/${encodeURIComponent(button.dataset.id)}/reports`, { method: 'POST', body: { reason } }); toast('Report sent to the moderators.'); await renderCommunity(routeInfo().query); return;
+    }
+    if (action === 'community-delete') {
+      if (!window.confirm('Remove your post from the public community feed?')) return;
+      await api(`/api/community/posts/${encodeURIComponent(button.dataset.id)}`, { method: 'DELETE', body: {} }); toast('Your post was removed from the feed.'); await renderCommunity(routeInfo().query); return;
+    }
+    if (action === 'admin-community-report') {
+      const hidePost = button.dataset.hide === 'true';
+      await api(`/api/admin/community/reports/${encodeURIComponent(button.dataset.id)}`, { method: 'PATCH', body: { status: button.dataset.status, hidePost } });
+      toast(hidePost ? 'Post hidden and report resolved.' : 'Report dismissed.'); await renderAdmin(); return;
+    }
+    if (action === 'admin-community-post') {
+      await api(`/api/admin/community/posts/${encodeURIComponent(button.dataset.id)}`, { method: 'PATCH', body: { hidden: button.dataset.hidden === 'true' } });
+      toast(button.dataset.hidden === 'true' ? 'Post hidden.' : 'Post restored.'); await renderAdmin(); return;
     }
     if (action === 'swap-status') {
       const data = await api(`/api/swaps/${encodeURIComponent(button.dataset.id)}/status`, { method: 'PATCH', body: { action: button.dataset.value } });
