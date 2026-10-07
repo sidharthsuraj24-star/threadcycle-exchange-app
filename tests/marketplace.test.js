@@ -508,6 +508,30 @@ test('dashboard escapes a member-controlled name before rendering HTML', async (
   assert.doesNotMatch(appRoot.innerHTML, /Hello, <img/);
 });
 
+test('shipment panel links only to the free external manual calculator and does not collect quote details', () => {
+  const appRoot = { innerHTML: '' };
+  const context = {
+    document: { getElementById: () => appRoot },
+    URL,
+    URLSearchParams,
+    location: { href: 'https://market.test/dashboard', origin: 'https://market.test' }
+  };
+  vm.createContext(context);
+  const frontend = fs.readFileSync(require.resolve('../public/app.js'), 'utf8');
+  const bootstrapOffset = frontend.indexOf("appRoot.addEventListener('submit', submitHandler);");
+  assert.ok(bootstrapOffset > 0, 'frontend bootstrap boundary exists');
+  vm.runInContext(frontend.slice(0, bootstrapOffset), context, { filename: 'public/app.js' });
+  const markup = vm.runInContext("shipmentPanel({ id: 'swap-1', status: 'accepted', agreementConfirmed: false, requester: { id: 'member-1' }, recipient: { id: 'member-2' }, shipment: { status: 'not_started', history: [] } }, 'member-1')", context);
+
+  assert.match(markup, /href="https:\/\/www\.shiprocket\.in\/shipping-rate-calculator\/"/);
+  assert.match(markup, /target="_blank" rel="noopener noreferrer"/);
+  assert.match(markup, /free manual shipping estimate/);
+  assert.match(markup, /external estimate only/);
+  assert.match(markup, /any courier shipment you arrange will cost money/);
+  assert.match(markup, /does not collect or send them, request quotes, or book shipments/);
+  assert.doesNotMatch(markup, /name="(?:pickup|delivery|pin|weight|dimensions)/i);
+});
+
 test('listing detail presents the optional comparable price separately and marks it unverified', async () => {
   const appRoot = { innerHTML: '' };
   const context = {
