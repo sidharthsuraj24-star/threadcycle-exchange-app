@@ -23,6 +23,8 @@ let listingOtherCity;
 let communityPostId;
 let communityReportId;
 let mainSwapId;
+let demoTrackingNumber;
+let demoShipmentId;
 let otherCityAgent;
 let outsider;
 let testClientIp = 20;
@@ -52,8 +54,8 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
   process.env.MONGODB_URI = mongo.getUri('clothing_swap_test');
   process.env.SESSION_SECRET = 'test-session-secret-long-enough-to-meet-minimum-32-bytes';
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
-  const { User, Listing, Swap, ActivityEvent, RateLimitCounter, CommunityPost, CommunityReport } = require('../server/models');
-  await Promise.all([User.createIndexes(), Listing.createIndexes(), Swap.createIndexes()]);
+  const { User, Listing, Swap, ActivityEvent, RateLimitCounter, CommunityPost, CommunityReport, DemoShipment } = require('../server/models');
+  await Promise.all([User.createIndexes(), Listing.createIndexes(), Swap.createIndexes(), DemoShipment.createIndexes()]);
   app = require('../server/app').app;
   app.set('trust proxy', 1);
   const { seedDemoListings } = require('../server/seed');
@@ -251,6 +253,11 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     const response = await agentA.post('/api/swaps').set('x-csrf-token', token).send({ requestedListingId: listingB.id, offeredListingId: listingA.id, note: 'Would love to compare shoulder measurements.', handoffPreference: 'remote' }).expect(201);
     const swapId = response.body.swap.id;
     mainSwapId = swapId;
+    const courierInput = { pickupLocality: 'Aundh', deliveryLocality: 'Kalyani Nagar', packageCategory: 'clothing_standard', weightKg: '1' };
+    await supertest(app).get(`/api/swaps/${swapId}/courier/shipment`).expect(401);
+    await supertest(app).get(`/api/swaps/${swapId}/courier/tracking`).expect(401);
+    await supertest(app).post(`/api/swaps/${swapId}/courier/rates`).send(courierInput).expect(401);
+    await outsider.get(`/api/swaps/${swapId}/courier/shipment`).expect(404);
     const initial = await Swap.findById(swapId).lean();
     assert.equal(initial.handoffPreference, 'remote');
     assert.deepEqual(initial.statusHistory[0].from, 'none');
@@ -266,6 +273,8 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     assert.equal((await agentB.get(`/api/swaps/${swapId}/messages`).expect(200)).body.messages.length, 3);
     await outsider.get(`/api/swaps/${swapId}/messages`).expect(404);
     const outsiderCsrf = await csrf(outsider);
+    await outsider.post(`/api/swaps/${swapId}/courier/rates`).set('x-csrf-token', outsiderCsrf).send(courierInput).expect(404);
+    await outsider.get(`/api/swaps/${swapId}/courier/tracking`).expect(404);
     await outsider.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', outsiderCsrf).send({ action: 'propose', terms: 'Outsider cannot see these terms.' }).expect(404);
     await outsider.patch(`/api/swaps/${swapId}/shipment`).set('x-csrf-token', outsiderCsrf).send({ status: 'in_transit' }).expect(404);
     await agentA.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', csrfA).send({ action: 'propose', terms: 'Agreed item pair and mutually selected hand-off plan.' }).expect(409);
@@ -273,6 +282,8 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     await agentB.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfB).send({ action: 'accept' }).expect(200);
     assert.equal((await Listing.findById(listingA.id)).status, 'reserved');
     assert.equal((await Listing.findById(listingB.id)).status, 'reserved');
+    await agentA.post(`/api/swaps/${swapId}/courier/rates`).set('x-csrf-token', csrfA).send(courierInput).expect(409);
+    assert.equal(await DemoShipment.countDocuments({ swap: swapId }), 0, 'acceptance alone does not permit a demo shipment');
     await agentA.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfA).send({ action: 'confirm' }).expect(409);
     await agentA.patch(`/api/swaps/${swapId}/shipment`).set('x-csrf-token', csrfA).send({ serviceLabel: 'Manual label', trackingReference: 'ref-private-1', status: 'in_transit', preference: 'remote' }).expect(409);
     await agentA.patch(`/api/swaps/${swapId}/agreement`).set('x-csrf-token', csrfA).send({ action: 'propose', terms: 'Agreed item pair and mutually selected hand-off plan.' }).expect(200);
@@ -313,6 +324,50 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     assert.equal(participantView.shipment.trackingReference, 'private-ref-123');
     const publicListings = await agentA.get('/api/listings').expect(200);
     assert.doesNotMatch(JSON.stringify(publicListings.body), /private-ref-123/);
+    assert.equal(await DemoShipment.countDocuments({ swap: swapId }), 0, 'saving manual hand-off notes must not create a courier shipment');
+    await agentA.post(`/api/swaps/${swapId}/courier/rates`).set('x-csrf-token', csrfA).send({ ...courierInput, pickupLocality: '10 Park Street' }).expect(400);
+    await agentA.post(`/api/swaps/${swapId}/courier/rates`).set('x-csrf-token', csrfA).send({ ...courierInput, weightKg: '8' }).expect(400);
+    const ratesResponse = await agentA.post(`/api/swaps/${swapId}/courier/rates`).set('x-csrf-token', csrfA).send(courierInput).expect(200);
+    assert.equal(ratesResponse.body.simulated, true);
+    assert.match(ratesResponse.body.label, /NO REAL SHIPMENT/);
+    assert.deepEqual(ratesResponse.body.rates.map((rate) => rate.id).sort(), ['demo-economy', 'demo-express', 'demo-priority']);
+    assert.ok(ratesResponse.body.rates.every((rate) => rate.mode === 'demo' && rate.simulated === true && rate.currency === 'INR'));
+    const ratesAgain = await agentA.post(`/api/swaps/${swapId}/courier/rates`).set('x-csrf-token', csrfA).send(courierInput).expect(200);
+    assert.deepEqual(ratesAgain.body.rates, ratesResponse.body.rates, 'mock rates are deterministic for the same inputs');
+    assert.equal(await DemoShipment.countDocuments({ swap: swapId }), 0, 'getting rates does not create a shipment');
+    await agentA.post(`/api/swaps/${swapId}/courier/shipments`).set('x-csrf-token', csrfA)
+      .send({ ...courierInput, rateId: 'demo-express', mode: 'live' }).expect(400);
+    assert.equal(await DemoShipment.countDocuments({ swap: swapId }), 0, 'a live-mode request is rejected before persistence');
+    const demoCreated = await agentA.post(`/api/swaps/${swapId}/courier/shipments`).set('x-csrf-token', csrfA)
+      .send({ ...courierInput, rateId: 'demo-express', mode: 'demo' }).expect(201);
+    const demoShipment = demoCreated.body.shipment;
+    demoTrackingNumber = demoShipment.trackingNumber;
+    demoShipmentId = demoShipment.id;
+    assert.match(demoTrackingNumber, /^DEMO-SL-[A-F0-9]{16}$/);
+    assert.equal(demoShipment.swapId, swapId);
+    assert.equal(demoShipment.provider, 'local-mock');
+    assert.equal(demoShipment.mode, 'demo');
+    assert.equal(demoShipment.status, 'SIMULATED_SHIPPED');
+    assert.equal(demoShipment.pickupLocality, 'Aundh');
+    assert.equal(demoShipment.deliveryLocality, 'Kalyani Nagar');
+    const persistedDemoShipment = await DemoShipment.findById(demoShipmentId).lean();
+    assert.equal(String(persistedDemoShipment.swap), swapId);
+    assert.equal(String(persistedDemoShipment.createdBy), userA.id);
+    const duplicateCreate = await agentB.post(`/api/swaps/${swapId}/courier/shipments`).set('x-csrf-token', csrfB)
+      .send({ ...courierInput, rateId: 'demo-economy', mode: 'demo' }).expect(200);
+    assert.equal(duplicateCreate.body.alreadyCreated, true);
+    assert.equal(duplicateCreate.body.shipment.trackingNumber, demoTrackingNumber, 'retry cannot create a second shipment for the swap');
+    const privateDemoShipment = await agentB.get(`/api/swaps/${swapId}/courier/shipment`).expect(200);
+    assert.equal(privateDemoShipment.body.shipment.trackingNumber, demoTrackingNumber);
+    const demoTracking = await agentB.get(`/api/swaps/${swapId}/courier/tracking`).expect(200);
+    assert.equal(demoTracking.body.tracking.simulated, true);
+    assert.equal(demoTracking.body.tracking.status, 'Shipped · simulated');
+    assert.equal(demoTracking.body.tracking.statusCode, 'SIMULATED_SHIPPED');
+    assert.ok(demoTracking.body.tracking.events.some((event) => event.state === 'current'));
+    assert.ok(demoTracking.body.tracking.events.some((event) => event.state === 'illustrative'));
+    await outsider.get(`/api/swaps/${swapId}/courier/shipment`).expect(404);
+    await outsider.get(`/api/swaps/${swapId}/courier/tracking`).expect(404);
+    assert.doesNotMatch(JSON.stringify(publicListings.body), /Aundh|Kalyani Nagar|DEMO-SL-/);
     await agentA.patch(`/api/swaps/${swapId}/status`).set('x-csrf-token', csrfA).send({ action: 'confirm' }).expect(200);
     const pending = await Swap.findById(swapId).lean();
     assert.equal(pending.status, 'accepted');
@@ -368,6 +423,15 @@ test('end-to-end marketplace flows use the MongoDB data models and persisted ses
     assert.equal(activity.requestAcceptanceRatePercent, 50);
     assert.ok(Date.now() - new Date(activity.startsAt).getTime() >= 30 * 24 * 60 * 60 * 1000 - 100);
     assert.doesNotMatch(JSON.stringify(overview.body), /private-ref-123/);
+    const adminDemoShipment = overview.body.demoShipments.find((shipment) => shipment.id === demoShipmentId);
+    assert.ok(adminDemoShipment, 'admin can see the demo shipment record');
+    assert.equal(adminDemoShipment.trackingNumber, demoTrackingNumber);
+    assert.equal(adminDemoShipment.swapId, mainSwapId);
+    assert.equal(adminDemoShipment.provider, 'local-mock');
+    assert.equal(adminDemoShipment.mode, 'demo');
+    assert.equal(adminDemoShipment.status, 'SIMULATED_SHIPPED');
+    assert.equal('pickupLocality' in adminDemoShipment, false);
+    assert.doesNotMatch(JSON.stringify(overview.body), /Aundh|Kalyani Nagar/);
     const adminMainSwap = overview.body.swaps.find((s) => s.id === mainSwapId);
     assert.equal('shipment' in adminMainSwap, false, 'admin overview does not receive participant-only shipment references');
     const communityQueue = await agentA.get('/api/admin/community/reports').expect(200);
@@ -584,6 +648,73 @@ test('community post cards escape member-authored titles, posts, and comments', 
   assert.match(appRoot.innerHTML, /&lt;svg onload=alert\(2\)&gt;/);
   assert.match(appRoot.innerHTML, /&lt;iframe&gt;bad&lt;\/iframe&gt;/);
   assert.doesNotMatch(appRoot.innerHTML, /<script>unsafe\(\)<\/script>/);
+});
+test('courier service returns deterministic demo data and always blocks live booking without a provider', async () => {
+  const previousMode = process.env.COURIER_MODE;
+  const previousLiveFlag = process.env.LIVE_SHIPMENTS;
+  try {
+    process.env.COURIER_MODE = 'demo';
+    process.env.LIVE_SHIPMENTS = 'false';
+    const { CourierService } = require('../server/courier/service');
+    const service = new CourierService();
+    const details = { pickupLocality: 'Aundh', deliveryLocality: 'Kalyani Nagar', packageCategory: 'clothing_standard', weightKg: 1 };
+    const rates = await service.getRates(details);
+    assert.deepEqual(await service.getRates(details), rates);
+    assert.ok(rates.every((rate) => rate.mode === 'demo' && rate.simulated));
+    const simulated = await service.createShipment({ ...details, rate: rates[0] });
+    assert.deepEqual(await service.createShipment({ ...details, rate: rates[0] }), simulated, 'the mock tracking reference is deterministic for the same shipment inputs');
+    assert.equal(simulated.mode, 'demo');
+    assert.equal(simulated.provider, 'local-mock');
+    assert.match(simulated.trackingNumber, /^DEMO-SL-[A-F0-9]{16}$/);
+    const tracking = await service.getTracking(simulated);
+    assert.equal(tracking.simulated, true);
+    assert.match(tracking.label, /NO REAL SHIPMENT/);
+    const cancelled = await service.cancelShipment(simulated);
+    assert.equal(cancelled.status, 'SIMULATED_CANCELLED');
+    await assert.rejects(service.createLiveShipment({}), /Live shipment booking is disabled/);
+    process.env.LIVE_SHIPMENTS = 'true';
+    await assert.rejects(service.createLiveShipment({}), /No live courier provider is configured/);
+    process.env.COURIER_MODE = 'live';
+    await assert.rejects(service.getRates(details), /Only the local demo courier provider is available/);
+  } finally {
+    if (previousMode === undefined) delete process.env.COURIER_MODE; else process.env.COURIER_MODE = previousMode;
+    if (previousLiveFlag === undefined) delete process.env.LIVE_SHIPMENTS; else process.env.LIVE_SHIPMENTS = previousLiveFlag;
+  }
+});
+test('demo courier panel labels simulation, collects only locality-level details, and adapts for mobile', () => {
+  const appRoot = { innerHTML: '' };
+  const context = {
+    document: { getElementById: () => appRoot },
+    URL,
+    URLSearchParams,
+    location: { href: 'https://market.test/messages/swap-1', origin: 'https://market.test' }
+  };
+  vm.createContext(context);
+  const frontend = fs.readFileSync(require.resolve('../public/app.js'), 'utf8');
+  const bootstrapOffset = frontend.indexOf("appRoot.addEventListener('submit', submitHandler);");
+  assert.ok(bootstrapOffset > 0, 'frontend bootstrap boundary exists');
+  vm.runInContext(frontend.slice(0, bootstrapOffset), context, { filename: 'public/app.js' });
+  const formMarkup = vm.runInContext("courierPanel({ id: 'swap-1', status: 'accepted', agreementConfirmed: true, requester: { id: 'member-1', city: 'Pune' }, recipient: { id: 'member-2', city: 'Mumbai' } }, 'member-1', null, null)", context);
+  assert.match(formMarkup, /Arrange Delivery/);
+  assert.match(formMarkup, /DEMO ONLY · NO REAL SHIPMENT OR PAYMENT/);
+  assert.match(formMarkup, /Get simulated rates/);
+  assert.match(formMarkup, /name="pickupLocality"/);
+  assert.match(formMarkup, /name="deliveryLocality"/);
+  assert.match(formMarkup, /name="packageCategory"/);
+  assert.match(formMarkup, /name="weightKg"/);
+  assert.doesNotMatch(formMarkup, /name="(?:street|address|pinCode|phone|email)"/i);
+  vm.runInContext("courierQuotes.set('swap-1', { details: { pickupLocality: 'Pune', deliveryLocality: 'Mumbai', packageCategory: 'clothing_standard', weightKg: '1' }, rates: [{ id: 'demo-express', courier: 'Demo Express', estimatedCost: 82, currency: 'INR', estimatedDelivery: '3–4 days' }] })", context);
+  const rateMarkup = vm.runInContext("courierPanel({ id: 'swap-1', status: 'accepted', agreementConfirmed: true, requester: { id: 'member-1', city: 'Pune' }, recipient: { id: 'member-2', city: 'Mumbai' } }, 'member-1', null, null)", context);
+  assert.match(rateMarkup, /SIMULATED COURIER OPTIONS/);
+  assert.match(rateMarkup, /Create Demo Shipment/);
+  assert.match(rateMarkup, /name="rateId"/);
+  assert.match(rateMarkup, /Demo Express/);
+  const shippedMarkup = vm.runInContext("courierPanel({ id: 'swap-1', status: 'accepted', agreementConfirmed: true, requester: { id: 'member-1', city: 'Pune' }, recipient: { id: 'member-2', city: 'Mumbai' } }, 'member-1', { trackingNumber: 'DEMO-SL-AB12CD34', courierName: 'Demo Express', estimatedCost: 82, currency: 'INR', pickupLocality: 'Pune', deliveryLocality: 'Mumbai', estimatedDelivery: '3–4 days' }, { status: 'Shipped · simulated', events: [{ label: 'Shipped · simulated', state: 'current', occurredAt: null }, { label: 'Example next stage: in transit', state: 'illustrative', occurredAt: null }] })", context);
+  assert.match(shippedMarkup, /SIMULATED SHIPMENT · NO REAL DELIVERY/);
+  assert.match(shippedMarkup, /Shipped · simulated/);
+  assert.match(shippedMarkup, /Illustrative only · not carrier activity/);
+  const styles = fs.readFileSync(require.resolve('../public/styles.css'), 'utf8');
+  assert.match(styles, /@media\(max-width:720px\)\{[^}]*\.courier-choice-grid,\.courier-rate-grid\{grid-template-columns:1fr\}/);
 });
 test.after(async () => {
   if (app?.locals?.sessionStore?.close) { try { await app.locals.sessionStore.close(); } catch {} }

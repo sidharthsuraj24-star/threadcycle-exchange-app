@@ -9,13 +9,15 @@ const mongoose = require('mongoose');
 const sharp = require('sharp');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { User, Listing, Swap, Message, ActivityEvent, CommunityPost, CommunityComment, CommunityReport, COMMUNITY_CATEGORIES } = require('./models');
+const { User, Listing, Swap, Message, ActivityEvent, CommunityPost, CommunityComment, CommunityReport, DemoShipment, COMMUNITY_CATEGORIES } = require('./models');
 const { initializeDatabase } = require('./database');
 const { MongoRateLimitStore } = require('./rate-limit-store');
 const { estimateValue, CATEGORIES, CONDITIONS, BRANDS } = require('./value');
 const { normalizeCity, cityMatchKey, cityPattern } = require('./city');
+const { CourierService } = require('./courier/service');
 
 const app = express();
+const courierService = new CourierService();
 const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
 if (isProduction && !process.env.MONGODB_URI) throw new Error('MONGODB_URI is required in production; application data and sessions must use MongoDB.');
 if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY));
@@ -179,6 +181,37 @@ const getSwapForUser = async (id, userId) => {
   if (!swap || !isParticipant(swap, userId)) throw new HttpError(404, 'Swap not found.');
   return swap;
 };
+const assertSwapReadyForCourier = (swap) => {
+  const currentAgreement = swap.agreements?.[swap.agreements.length - 1];
+  const agreedIds = new Set((currentAgreement?.confirmedBy || []).map((entry) => String(entry.member)));
+  if (swap.status !== 'accepted' || !currentAgreement || ![swap.requester, swap.recipient].every((id) => agreedIds.has(String(id)))) {
+    throw new HttpError(409, 'Demo courier options are available only after the accepted swap terms are confirmed by both participants.');
+  }
+};
+const courierLocality = (value, field) => {
+  const locality = safeText(value, 60, field).replace(/\s+/g, ' ');
+  if (!/^[\p{L}\p{M}][\p{L}\p{M}0-9 .'-]{0,59}$/u.test(locality)) throw new HttpError(400, `${field} must be a city or locality only; do not enter a street address or PIN code.`);
+  return locality;
+};
+const courierDetailsFromBody = (body) => {
+  const packageCategory = enumValue(body.packageCategory, ['clothing_small', 'clothing_standard', 'clothing_box'], 'package category');
+  const weightKg = Number(body.weightKg);
+  if (![0.5, 1, 2, 5].includes(weightKg)) throw new HttpError(400, 'Choose an approximate package weight of 0.5, 1, 2, or 5 kg.');
+  return {
+    pickupLocality: courierLocality(body.pickupLocality, 'Pickup locality'),
+    deliveryLocality: courierLocality(body.deliveryLocality, 'Delivery locality'),
+    packageCategory,
+    weightKg
+  };
+};
+const courierShipmentView = (shipment) => ({
+  id: String(shipment._id), swapId: String(shipment.swap), provider: shipment.provider, mode: shipment.mode,
+  trackingNumber: shipment.trackingNumber, status: shipment.status, courierId: shipment.courierId,
+  courierName: shipment.courierName, pickupLocality: shipment.pickupLocality, deliveryLocality: shipment.deliveryLocality,
+  packageCategory: shipment.packageCategory, weightKg: shipment.weightKg, estimatedCost: shipment.estimatedCost,
+  currency: shipment.currency, estimatedDelivery: shipment.estimatedDelivery, createdAt: shipment.createdAt,
+  updatedAt: shipment.updatedAt
+});
 const validateImageBytes = (file) => {
   const b = file.buffer;
   let mime = null;
@@ -632,6 +665,62 @@ app.patch('/api/swaps/:id/shipment', requireUser, requireCsrf, async (req, res) 
     res.json({ swap: { id: String(swap._id), handoffPreference: swap.handoffPreference, ...swapPrivateState(swap, req.user._id) } });
   } catch (e) { sendError(res, e); }
 });
+app.get('/api/swaps/:id/courier/shipment', requireUser, async (req, res) => {
+  try {
+    const swap = await getSwapForUser(req.params.id, req.user._id);
+    const shipment = await DemoShipment.findOne({ swap: swap._id });
+    res.json({ shipment: shipment ? courierShipmentView(shipment) : null });
+  } catch (e) { sendError(res, e); }
+});
+app.post('/api/swaps/:id/courier/rates', requireUser, requireCsrf, async (req, res) => {
+  try {
+    const swap = await getSwapForUser(req.params.id, req.user._id);
+    assertSwapReadyForCourier(swap);
+    if (await DemoShipment.exists({ swap: swap._id })) throw new HttpError(409, 'A demo shipment already exists for this swap.');
+    const details = courierDetailsFromBody(req.body);
+    const rates = await courierService.getRates(details);
+    res.json({ simulated: true, label: 'SIMULATED COURIER OPTIONS — NO REAL SHIPMENT', rates });
+  } catch (e) { sendError(res, e); }
+});
+app.post('/api/swaps/:id/courier/shipments', requireUser, requireCsrf, async (req, res) => {
+  try {
+    const swap = await getSwapForUser(req.params.id, req.user._id);
+    assertSwapReadyForCourier(swap);
+    if (req.body.mode !== undefined && req.body.mode !== 'demo') throw new HttpError(400, 'Only demo courier shipments are available; live booking is disabled.');
+    const existing = await DemoShipment.findOne({ swap: swap._id });
+    if (existing) return res.json({ shipment: courierShipmentView(existing), alreadyCreated: true });
+    const details = courierDetailsFromBody(req.body);
+    const rateId = enumValue(req.body.rateId, ['demo-express', 'demo-priority', 'demo-economy'], 'simulated courier option');
+    const rates = await courierService.getRates(details);
+    const rate = rates.find((option) => option.id === rateId);
+    if (!rate) throw new HttpError(400, 'Choose one of the displayed simulated courier options.');
+    const created = await courierService.createShipment({ ...details, rate, swapId: String(swap._id) });
+    const now = new Date();
+    let shipment;
+    try {
+      shipment = await DemoShipment.create({
+        swap: swap._id, provider: 'local-mock', mode: 'demo', trackingNumber: created.trackingNumber,
+        status: created.status, courierId: created.courierId, courierName: created.courierName,
+        ...details, estimatedCost: created.estimatedCost, currency: created.currency,
+        estimatedDelivery: created.estimatedDelivery, createdBy: req.user._id, createdAt: now, updatedAt: now
+      });
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+      shipment = await DemoShipment.findOne({ swap: swap._id });
+      if (!shipment) throw error;
+      return res.json({ shipment: courierShipmentView(shipment), alreadyCreated: true });
+    }
+    res.status(201).json({ shipment: courierShipmentView(shipment), alreadyCreated: false });
+  } catch (e) { sendError(res, e); }
+});
+app.get('/api/swaps/:id/courier/tracking', requireUser, async (req, res) => {
+  try {
+    const swap = await getSwapForUser(req.params.id, req.user._id);
+    const shipment = await DemoShipment.findOne({ swap: swap._id });
+    if (!shipment) throw new HttpError(404, 'Demo shipment not found.');
+    res.json({ tracking: await courierService.getTracking(shipment) });
+  } catch (e) { sendError(res, e); }
+});
 app.get('/api/swaps/:id/messages', requireUser, async (req, res) => {
   try {
     const swap = await getSwapForUser(req.params.id, req.user._id);
@@ -677,7 +766,7 @@ app.get('/api/admin/overview', requireUser, requireAdmin, async (_req, res) => {
   try {
     const windowEnd = new Date();
     const windowStart = new Date(windowEnd.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const [members, liveListings, requests, accepted, completed, disputed, recentUsers, recentListings, recentSwaps, eligibleMemberIds, requestsCreated30d, requestsAccepted30d] = await Promise.all([
+    const [members, liveListings, requests, accepted, completed, disputed, recentUsers, recentListings, recentSwaps, eligibleMemberIds, requestsCreated30d, requestsAccepted30d, recentDemoShipments] = await Promise.all([
       User.countDocuments({ isDemo: false }), Listing.countDocuments({ isDemo: false, status: 'available' }), Swap.countDocuments({}),
       Swap.countDocuments({ status: 'accepted' }), Swap.countDocuments({ status: 'completed' }), Swap.countDocuments({ status: 'disputed' }),
       User.find({ isDemo: false }).select('name email city role suspended createdAt').sort({ createdAt: -1 }).limit(30),
@@ -685,7 +774,8 @@ app.get('/api/admin/overview', requireUser, requireAdmin, async (_req, res) => {
       Swap.find({}).sort({ updatedAt: -1 }).limit(30).populate('requester', 'name city').populate('recipient', 'name city').populate('offeredListing', 'title category size estimatedValue imageCount isDemo status').populate('requestedListing', 'title category size estimatedValue imageCount isDemo status'),
       User.find({ isDemo: false, suspended: false, createdAt: { $lte: windowEnd } }).distinct('_id'),
       Swap.countDocuments({ createdAt: { $gte: windowStart, $lte: windowEnd } }),
-      Swap.countDocuments({ createdAt: { $gte: windowStart, $lte: windowEnd }, 'statusHistory.to': 'accepted' })
+      Swap.countDocuments({ createdAt: { $gte: windowStart, $lte: windowEnd }, 'statusHistory.to': 'accepted' }),
+      DemoShipment.find({ mode: 'demo' }).sort({ createdAt: -1 }).limit(50).populate('swap', '_id')
     ]);
     const activityRows = eligibleMemberIds.length ? await ActivityEvent.aggregate([
       { $match: { member: { $in: eligibleMemberIds }, createdAt: { $gte: windowStart, $lte: windowEnd } } },
@@ -696,10 +786,11 @@ app.get('/api/admin/overview', requireUser, requireAdmin, async (_req, res) => {
     const engagementRatePercent = eligibleMemberIds.length ? Math.round((engagedMembers30d / eligibleMemberIds.length) * 10000) / 100 : null;
     const swapAcceptanceRatePercent = requestsCreated30d ? Math.round((requestsAccepted30d / requestsCreated30d) * 10000) / 100 : null;
     const adminSwapView = (s) => ({ id: String(s._id), status: s.status, note: s.note, handoffPreference: s.handoffPreference, adminNote: s.adminNote, createdAt: s.createdAt, requester: userView(s.requester), recipient: userView(s.recipient), offeredListing: s.offeredListing && listingView(s.offeredListing, s.requester), requestedListing: s.requestedListing && listingView(s.requestedListing, s.recipient), statusHistory: (s.statusHistory || []).map((entry) => ({ from: entry.from, to: entry.to, actorId: String(entry.actor), at: entry.at })) });
+    const adminDemoShipmentViews = recentDemoShipments.map((shipment) => ({ id: String(shipment._id), trackingNumber: shipment.trackingNumber, swapId: String(shipment.swap?._id || shipment.swap), provider: shipment.provider, mode: shipment.mode, status: shipment.status, createdAt: shipment.createdAt }));
     res.json({ kpis: {
       registeredMembers: members, availableMemberListings: liveListings, swapRequests: requests, acceptedSwaps: accepted, memberConfirmedCompletions: completed, disputesOpen: disputed,
       activity30d: { startsAt: windowStart, endsAt: windowEnd, eligibleMemberCount: eligibleMemberIds.length, activeUsers: activeUsers30d, engagedMemberCount: engagedMembers30d, engagementRatePercent, requestsCreated: requestsCreated30d, requestsAccepted: requestsAccepted30d, requestAcceptanceRatePercent: swapAcceptanceRatePercent }
-    }, users: recentUsers.map((u) => ({ ...userView(u), suspended: u.suspended })), listings: recentListings.map((i) => listingView(i)), swaps: recentSwaps.map(adminSwapView), note: 'Counts use member and swap records; seed/demo accounts and listings are excluded. Activity analytics are first-party server events over the rolling 30 days; no third-party tracker or PII fields are stored. Completion is counted only after both members confirm.' });
+    }, users: recentUsers.map((u) => ({ ...userView(u), suspended: u.suspended })), listings: recentListings.map((i) => listingView(i)), swaps: recentSwaps.map(adminSwapView), demoShipments: adminDemoShipmentViews, note: 'Counts use member and swap records; seed/demo accounts and listings are excluded. Activity analytics are first-party server events over the rolling 30 days; no third-party tracker or PII fields are stored. Completion is counted only after both members confirm.' });
   } catch (e) { sendError(res, e); }
 });
 app.patch('/api/admin/users/:id', requireUser, requireAdmin, requireCsrf, async (req, res) => {

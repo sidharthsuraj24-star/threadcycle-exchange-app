@@ -161,6 +161,29 @@ const communityReportSchema = new Schema({
 communityReportSchema.index({ status: 1, createdAt: 1 });
 communityReportSchema.index({ post: 1, reporter: 1, status: 1 });
 
+const demoShipmentSchema = new Schema({
+  swap: { type: Schema.Types.ObjectId, ref: 'Swap', required: true },
+  provider: { type: String, enum: ['local-mock'], required: true, default: 'local-mock' },
+  mode: { type: String, enum: ['demo'], required: true, default: 'demo' },
+  trackingNumber: { type: String, required: true, unique: true, trim: true, maxlength: 32 },
+  status: { type: String, enum: ['SIMULATED_SHIPPED', 'SIMULATED_CANCELLED'], required: true },
+  courierId: { type: String, enum: ['demo-express', 'demo-priority', 'demo-economy'], required: true },
+  courierName: { type: String, required: true, maxlength: 40 },
+  pickupLocality: { type: String, required: true, trim: true, maxlength: 60 },
+  deliveryLocality: { type: String, required: true, trim: true, maxlength: 60 },
+  packageCategory: { type: String, enum: ['clothing_small', 'clothing_standard', 'clothing_box'], required: true },
+  weightKg: { type: Number, required: true, min: 0.5, max: 5 },
+  estimatedCost: { type: Number, required: true, min: 0 },
+  currency: { type: String, enum: ['INR'], required: true, default: 'INR' },
+  estimatedDelivery: { type: String, required: true, maxlength: 24 },
+  createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  createdAt: { type: Date, required: true, default: Date.now },
+  updatedAt: { type: Date, required: true, default: Date.now },
+  cancelledAt: { type: Date, default: null }
+}, { versionKey: false });
+demoShipmentSchema.index({ swap: 1 }, { unique: true });
+demoShipmentSchema.index({ createdAt: -1 });
+
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 const Listing = mongoose.models.Listing || mongoose.model('Listing', listingSchema);
 const Swap = mongoose.models.Swap || mongoose.model('Swap', swapSchema);
@@ -170,4 +193,5 @@ const RateLimitCounter = mongoose.models.RateLimitCounter || mongoose.model('Rat
 const CommunityPost = mongoose.models.CommunityPost || mongoose.model('CommunityPost', communityPostSchema);
 const CommunityComment = mongoose.models.CommunityComment || mongoose.model('CommunityComment', communityCommentSchema);
 const CommunityReport = mongoose.models.CommunityReport || mongoose.model('CommunityReport', communityReportSchema);
-module.exports = { User, Listing, Swap, Message, ActivityEvent, RateLimitCounter, CommunityPost, CommunityComment, CommunityReport, COMMUNITY_CATEGORIES };
+const DemoShipment = mongoose.models.DemoShipment || mongoose.model('DemoShipment', demoShipmentSchema);
+module.exports = { User, Listing, Swap, Message, ActivityEvent, RateLimitCounter, CommunityPost, CommunityComment, CommunityReport, DemoShipment, COMMUNITY_CATEGORIES };

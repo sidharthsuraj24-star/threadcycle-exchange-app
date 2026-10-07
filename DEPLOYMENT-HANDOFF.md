@@ -1,23 +1,19 @@
 # Vercel deployment handoff
 
-The noncommercial student demo is live at the [production site](https://threadcycle-exchange-app.vercel.app/). It uses the private GitHub repository `sidharthsuraj24-star/threadcycle-exchange-app` on branch `vercel-preparation`; `main` is not the deployment branch. Keep the repository and project private, and do not enable paid resources.
+The noncommercial student demo is served at the [production site](https://threadcycle-exchange-app.vercel.app/) from the existing `vercel-preparation` branch. This owner-approved demo-courier release is based on deployed production commit `5a800b0` and was published only to `vercel-preparation`. `main` and Vercel project settings were not changed.
 
-The city-normalization and Community update is scoped to the existing `vercel-preparation` branch, based on production commit `6e0e0988`. Keep `main` unchanged and do not change Vercel settings; verify each release against Vercel's deployed SHA and public HTTP routes. Courier integration remains deferred.
+Vercel uses the root `index.js` as the Express Function entry point and serves `public/` assets from its CDN. Express skips local static serving on Vercel but serves `public/index.html` for client-side routes such as `/login`, `/dashboard`, and `/messages/<id>`; `/api` and `/api/*` remain API routes. `vercel.json` supplies security headers for CDN-served HTML, while Express responses retain Helmet.
 
-## Runtime and routing
-
-Vercel detects the root `index.js` and runs the Express app as a Function. Vercel serves `public/` assets from its CDN; Express skips local static-file serving in Vercel, but now serves `public/index.html` for non-API GET routes so client-side pages work on direct load and refresh. Requests to `/api` and `/api/*` are not rewritten to the app shell. `vercel.json` continues to provide security headers for the CDN-served HTML, while Express API responses retain Helmet.
-
-The deployed app uses MongoDB for listings, photos, swaps, messages, sessions, and rate-limit counters. Swap acceptance now uses a MongoDB transaction to reserve both listings and update conflicting requests atomically; the production database must support transactions. Accepted JPEG, PNG, and WebP uploads are re-encoded as WebP before storage, removing EXIF and other source metadata. The source upload limit remains four photos at 1 MB each.
+The app uses MongoDB for listings, photos, swaps, messages, sessions, rate-limit counters, community content, and demo shipments. Database initialization creates declared indexes, including the unique swap index for demo shipments. Production requires MongoDB and a strong `SESSION_SECRET`; there is no production disk or in-memory persistence fallback. Image upload remains capped at four files, 1 MB each, and accepted images are re-encoded before MongoDB storage.
 
 ## Product boundaries
 
-This remains a noncommercial student demo. Participants may enter private manual hand-off or shipment notes and self-reported status, but there is no courier API, booking, rates or labels, payment, public tracking, or carrier-verified delivery. Preserve this manual workflow; a courier integration or paid resource requires separate authorization.
+The existing manual hand-off notes remain private and unchanged. The new **Arrange Delivery** flow is a local deterministic simulation: synthetic INR rates, a generated demo tracking number, a visible **“Shipped · simulated”** state, and illustrative future tracking stages. It makes no external courier/API call, does not create a real booking or label, does not move a parcel, and processes no payment. Shipment details are participant-private; the admin overview exposes only demo/tracking ID, swap ID, provider, mode, status, and creation time.
 
-Illustrative sample listings and profiles are labeled, have no credentials, cannot receive swap requests, and are excluded from matching and KPI activity. A completed in-app swap is not proof of a physical exchange or delivery. Keep all database, session, and provider secrets in the existing protected deployment configuration; never commit or print them.
+`COURIER_MODE` defaults to `demo` and `LIVE_SHIPMENTS` defaults to `false`. No live provider or credentials are configured. Do not add a provider, create a ShipAny account, or contact the provider as part of this task. Any real-provider integration would need separate owner authorization, verified access and eligibility, and independently reviewed credential handling.
 
-## Verification
+## Verification and release
 
-Run `npm ci`, `npm run check`, and `npm test` before publishing changes. The integration suite uses a single-node MongoDB replica set so the concurrent-acceptance regression exercises transaction semantics; it also checks direct client routes, a missing-token CSRF request, and removal of location-like EXIF metadata.
+For this implementation, `npm run check`, `npm test`, and `git diff --check` pass. The integration suite uses an ephemeral single-node MongoDB replica set and exercises courier agreement/ownership gates, validation, idempotent creation, private tracking, admin minimization, and live-booking refusal. These local checks do not establish production database durability, backup/restore, performance, or real-world delivery. Responsive markup/CSS is asserted in tests, but no manual desktop/mobile browser review is included in that test evidence.
 
-For this fix, the original deployment was confirmed to return 404 on client-side page refreshes, while the homepage and API were reachable. After the branch update deploys, verify `/api/health`, direct loads of `/login`, `/dashboard`, and `/messages/<id>`, static assets, and a listing photo response. Do not add paid resources or courier integrations as part of this repair.
+Release verification requires Vercel to report the exact pushed source SHA as `READY` and public HTTP checks to pass, including `/api/health`, direct client-route loads, and the courier UI/API gates. Keep `main` unchanged and the project private. Do not enable paid resources, change Vercel settings, or add a real courier provider without separate authorization.

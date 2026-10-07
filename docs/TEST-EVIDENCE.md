@@ -1,29 +1,31 @@
 # Local verification evidence
 
-The city-normalization and community changes were implemented in `/workspace/threadcycle-production-review`, branch `cue-city-community-work`, based on production commit `6e0e0988`, on **2026-10-06**. Final checks were rerun on **2026-10-07**. These commands document local automated verification; release/deployment checks are separate.
+The demo-courier changes were implemented in `/workspace/threadcycle-production-review`, branch `demo-courier-sandbox`, based on verified production commit `5a800b0`. Final source and test checks were run on **2026-10-07** before the owner-approved publication; deployment and public HTTP checks are separate.
 
 ```text
-=== npm ci ===
-PASS — installed 172 locked packages; npm reported 0 vulnerabilities.
-
 === npm run check ===
-PASS — Node syntax checks for index.js, server/app.js, server/city.js,
-server/database.js, server/rate-limit-store.js, server/models.js,
-public/app.js, server/index.js, and tests/marketplace.test.js.
+PASS — configured Node syntax checks for index.js, server/app.js, server/city.js,
+server/database.js, server/rate-limit-store.js, server/models.js, public/app.js,
+server/index.js, and tests/marketplace.test.js.
+
+=== node --check server/courier/service.js ===
+=== node --check server/courier/mock-provider.js ===
+PASS — both new courier modules parse successfully.
 
 === npm test ===
-ℹ tests 15
-ℹ pass 15
+ℹ tests 18
+ℹ pass 18
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
-ℹ duration_ms 9475.790592
-The suite used a disposable single-node MongoDB replica set and stopped it.
+ℹ todo 0
+ℹ duration_ms 8454.032811
+PASS — disposable single-node MongoDB replica set stopped after the test run.
 
 === git diff --check ===
 PASS — no whitespace errors.
 ```
 
-The integration coverage includes normalized city input and case/spacing-insensitive match and browse filters; separation of the existing comparable retail-price reference from server-calculated swap estimates; public/category-filtered community browsing; authenticated posting, comments, toggleable likes, and reports; duplicate open-report rejection; self-report prevention; author-only soft deletion; admin report review and hide/restore behavior; and HTML escaping of community content. Existing production security, photo privacy, swap, analytics, and rate-limit tests also pass.
+The suite covers existing marketplace security, listing/photo handling, swaps, agreements, community, analytics, and admin behavior, plus demo-courier gates and validation, participant ownership/privacy, idempotent swap-linked tracking, deterministic mock rates and tracking reference, admin-minimal metadata, disabled live booking, locality-only form fields, the simulated shipped status, and responsive CSS rules. The added courier flow makes no external API calls and uses no credentials.
 
-The tests demonstrate local code behavior only. They do not verify Vercel build/deployment, production database durability/backups, browser/viewport experience, load, courier-provider behavior, real exchanges, or environmental impact. Public HTTP and Vercel release checks are separate from this local test evidence; courier integration remains deferred by product choice.
+These command results validate local code behavior only; the npm checks did not themselves exercise Vercel deployment or public HTTP. No manual browser/viewport review, production database durability/backup, load test, or carrier behavior was tested. A separate publication check supplements these results. No physical shipment was created.
