@@ -721,3 +721,32 @@ test.after(async () => {
   if (mongoose.connection.readyState) await mongoose.disconnect();
   if (mongo) await mongo.stop();
 });
+
+test('header displays an administrator account badge only for a signed-in admin role', () => {
+  const appRoot = { innerHTML: '' };
+  const context = {
+    document: { getElementById: () => appRoot },
+    URL,
+    URLSearchParams,
+    location: { href: 'https://market.test/dashboard', origin: 'https://market.test' }
+  };
+  vm.createContext(context);
+  const frontend = fs.readFileSync(require.resolve('../public/app.js'), 'utf8');
+  const bootstrapOffset = frontend.indexOf("appRoot.addEventListener('submit', submitHandler);");
+  assert.ok(bootstrapOffset > 0, 'frontend bootstrap boundary exists');
+  vm.runInContext(frontend.slice(0, bootstrapOffset), context, { filename: 'public/app.js' });
+
+  context.user = { id: 'admin-1', name: 'Owner', role: 'admin' };
+  vm.runInContext('currentUser = user', context);
+  const adminHeader = vm.runInContext("header('/dashboard')", context);
+  assert.match(adminHeader, /class="admin-account-badge" aria-label="Administrator account"/);
+  assert.match(adminHeader, /Administrator account/);
+  assert.match(adminHeader, /class="admin-account-short" aria-hidden="true">Admin/);
+  assert.match(adminHeader, /href="\/admin"/);
+
+  context.user = { id: 'member-1', name: 'Member', role: 'member' };
+  vm.runInContext('currentUser = user', context);
+  const memberHeader = vm.runInContext("header('/dashboard')", context);
+  assert.doesNotMatch(memberHeader, /admin-account-badge|Administrator account/);
+  assert.doesNotMatch(memberHeader, /href="\/admin"/);
+});
