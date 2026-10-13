@@ -37,7 +37,7 @@ The app has no hard-coded demo logins or admin password and no user self-service
 
 ## Production deployment
 
-The noncommercial student demo is live at the [production site](https://threadcycle-exchange-app.vercel.app/) from the existing `vercel-preparation` branch. This owner-approved demo-courier release was based on deployed commit `5a800b0` and published only to `vercel-preparation`; `main` and Vercel settings remain unchanged. The courier flow is simulated only and does not contact a real provider or process a payment.
+The noncommercial demo is live at the [production site](https://threadcycle-exchange-app.vercel.app/) from the existing `vercel-preparation` branch. This owner-approved demo-courier release was based on deployed commit `5a800b0` and published only to `vercel-preparation`; `main` and Vercel settings remain unchanged. The courier flow is simulated only and does not contact a real provider or process a payment.
 
 Vercel uses the root `index.js` as the Express Function entry point and serves `public/` from its CDN. Express skips local static serving on Vercel but serves `public/index.html` for client-side routes; `/api` endpoints are not rewritten. `vercel.json` sets security headers for CDN-served HTML, and Express responses retain Helmet.
 
